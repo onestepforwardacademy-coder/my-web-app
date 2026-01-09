@@ -15,3 +15,4 @@ requests
 selenium
 solders
 bip-utils
+solana==0.30.2
