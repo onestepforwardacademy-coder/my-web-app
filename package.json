@@ -1,0 +1,14 @@
+{
+  "name": "my-solana-bot",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "index.js",
+  "dependencies": {
+    "@solana/web3.js": "^1.98.4",
+    "bip39": "^3.1.0",
+    "bs58": "^5.0.0",
+    "ed25519-hd-key": "^1.3.0",
+    "node-telegram-bot-api": "^0.61.0",
+    "tweetnacl": "^1.0.3"
+  }
+}

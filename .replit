@@ -1,0 +1,13 @@
+run = "nix run"
+entrypoint = "flake.nix"
+modules = ["nix", "nodejs-20", "python-3.11"]
+
+[nix]
+channel = "stable-24_05"
+packages = ["geckodriver", "libGL", "libGLU", "libsodium", "tesseract"]
+
+[agent]
+expertMode = true
+
+[deployment]
+deploymentTarget = "cloudrun"
