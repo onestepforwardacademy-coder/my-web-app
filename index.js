@@ -495,7 +495,7 @@ bot.on("callback_query", async (query) => {
         return showMenu(chatId, "👑 *LUXE SOLANA WALLET* 👑");
     }
 });
-   // --- UPDATED PANIC SELL ALL HANDLER (WITH AUTO-DELETE) ---
+ // --- UPDATED PANIC SELL ALL HANDLER (WITH AUTO-DELETE) ---
     if (data === "panic_sell") {
         const trades = userTrades[chatId] || [];
         if (trades.length === 0) {
@@ -514,7 +514,7 @@ bot.on("callback_query", async (query) => {
             const tokenAddr = trades[i].address;
             if (i > 0) await new Promise(r => setTimeout(r, 1000)); 
 
-            // Using "-u" for real-time logs on Render
+            // Added "-u" for real-time Render logging
             const proc = spawn("python3", ["-u", "execute_sell.py", pk, tokenAddr]);
 
             proc.stderr.on("data", (data) => {
@@ -545,61 +545,12 @@ bot.on("callback_query", async (query) => {
                     });
                     setTimeout(() => deleteMessageSafe(chatId, resMsg.message_id), 15000);
                     userTrades[chatId] = [];
-                    // This return is now legal because it is inside the callback function
                     return showMenu(chatId, "👑 *LUXE SOLANA WALLET* 👑");
                 }
             });
         } // 🟢 Properly closes the 'for' loop
         return; 
-    } // 🟢 Properly closes the 'panic_sell' if-statement
-    // --- UPDATED PANIC SELL ALL HANDLER (WITH AUTO-DELETE) ---
-    if (data === "panic_sell") {
-        const trades = userTrades[chatId] || [];
-        if (trades.length === 0) {
-            const noneMsg = await bot.sendMessage(chatId, "❌ No active trades found.");
-            setTimeout(() => deleteMessageSafe(chatId, noneMsg.message_id), 5000);
-            return showMenu(chatId, "👑 *LUXE SOLANA WALLET* 👑");
-        }
-
-        await updateStatusMessage(chatId, `🚨 *PANIC SELL INITIATED* 🚨\nSelling ${trades.length} tokens...`);
-
-        const pk = bs58.encode(Array.from(state.keypair.secretKey));
-        const signatures = [];
-        let completed = 0;
-
-        for (let i = 0; i < trades.length; i++) {
-            const tokenAddr = trades[i].address;
-            if (i > 0) await new Promise(r => setTimeout(r, 1000)); 
-
-            const proc = spawn("python3", ["execute_sell.py", pk, tokenAddr]);
-
-            proc.stdout.on("data", (data) => {
-                const output = data.toString();
-                const sigMatch = output.match(/(?:Signature|TX|Hash):\s*([A-Za-z0-9]{32,88})/i);
-                if (sigMatch) signatures.push({ addr: tokenAddr, sig: sigMatch[1] });
-            });
-
-            proc.on("close", async () => {
-                completed++;
-                if (completed === trades.length) {
-                    let report = "✅ *PANIC SELL COMPLETE*\n\n";
-                    if (signatures.length > 0) {
-                        signatures.forEach((s, idx) => {
-                            report += `🔹 \`${s.addr.slice(0, 6)}...\` -> [View TX](https://solscan.io/tx/${s.sig})\n`;
-                        });
-                    } else {
-                        report += "⚠️ TXs sent, but no signatures captured.";
-                    }
-
-                    const resMsg = await bot.sendMessage(chatId, report, { parse_mode: "Markdown", disable_web_page_preview: true });
-                    setTimeout(() => deleteMessageSafe(chatId, resMsg.message_id), 15000);
-                    userTrades[chatId] = [];
-                    return showMenu(chatId, "👑 *LUXE SOLANA WALLET* 👑");
-                }
-            });
-        }
-        return;
-    }
+    } // 🟢 Properly closes the 'panic_sell' block
 
     if (data.startsWith("del_trade_")) {
         const idx = parseInt(data.split("_")[2]);
