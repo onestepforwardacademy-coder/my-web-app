@@ -181,6 +181,8 @@ async function runLiveMonitor(chatId) {
                 }).catch(() => {});
             }
         } catch (error) {
+            // This ensures you see connection errors in Render logs immediately
+            console.error(`🚨 Monitor Error for ${chatId}:`, error.message);
             logToFile(`Monitor Error for ${chatId}: ${error.message}`);
         }
     }, REFRESH_INTERVAL_MS);
@@ -342,6 +344,9 @@ bot.onText(/\/start/, async (msg) => {
 // ------------------------------------------------------------------------------
 
 bot.on("callback_query", async (query) => {
+    // 🟢 Fix: Stops the loading spinner on the Telegram button immediately
+    await bot.answerCallbackQuery(query.id).catch(() => {});
+
     const chatId = query.message.chat.id;
     const data = query.data;
 
@@ -352,6 +357,7 @@ bot.on("callback_query", async (query) => {
     const state = userState[chatId];
     const messageId = query.message.message_id;
 
+    // 1️⃣ VIEW LIST OF ACTIVE TRADES
     if (data === "sell_back_list") {
         await deleteMessageSafe(chatId, messageId);
         const trades = userTrades[chatId] || [];
@@ -367,50 +373,182 @@ bot.on("callback_query", async (query) => {
         return bot.sendMessage(chatId, `💰 *SELECT TOKEN TO SELL BACK*\nTotal active pairs: ${trades.length}`, { parse_mode: "Markdown", reply_markup: { inline_keyboard: btns } });
     }
 
+    // 2️⃣ CONFIRMATION SCREEN FOR SELL BACK
     if (data.startsWith("conf_sell_")) {
         const idx = data.split("_")[2];
         const trade = userTrades[chatId][idx];
-        const confirmKb = { inline_keyboard: [[{ text: "✅ CONFIRM SELL", callback_data: `exec_sell_${idx}` }], [{ text: "❌ CANCEL", callback_data: "sell_back_list" }]] };
+        if (!trade) return;
+        
+        const confirmKb = { 
+            inline_keyboard: [
+                [{ text: "✅ CONFIRM SELL", callback_data: `exec_sell_${idx}` }], 
+                [{ text: "❌ CANCEL", callback_data: "sell_back_list" }]
+            ] 
+        };
         return bot.sendMessage(chatId, `⚠️ *CONFIRM SELL*\n\nToken: \`${trade.address}\`\nExecute Sell Back?`, { parse_mode: "Markdown", reply_markup: confirmKb });
     }
 
-    // --- UPDATED SELL BACK WITH SIGNATURE & AUTO-DELETE ---
+    // 3️⃣ EXECUTE SELL BACK (PYTHON)
     if (data.startsWith("exec_sell_")) {
         const idx = data.split("_")[2];
         const trade = userTrades[chatId][idx];
-        const secret = bs58.encode(Array.from(state.keypair.secretKey));
+        if (!trade || !state.keypair) return;
 
+        const secret = bs58.encode(Array.from(state.keypair.secretKey));
         await deleteMessageSafe(chatId, messageId);
         await updateStatusMessage(chatId, `🚀 *EXECUTING SELL BACK...*`);
 
-        const signatures = [];
-        const proc = spawn("python3", ["execute_sell.py", secret, trade.address]);
-
-        proc.stdout.on("data", (d) => { 
-            const output = d.toString();
-            process.stdout.write(`[SELL-BACK LOG]: ${output}`); 
-            const sigMatch = output.match(/(?:Signature|TX|Hash):\s*([A-Za-z0-9]{32,88})/i);
-            if (sigMatch) signatures.push(sigMatch[1]);
-        });
-
+        const proc = spawn("python3", ["-u", "execute_sell.py", secret, trade.address]);
+        
+        proc.stderr.on("data", (err) => console.error(`🚨 SELL ERROR: ${err.toString()}`));
+        
         proc.on("close", async () => {
             userTrades[chatId].splice(idx, 1);
-            let report = "✅ *SELL COMPLETE*";
-            if (signatures.length > 0) {
-                report += `\n\n🔗 [View Transaction](https://solscan.io/tx/${signatures[0]})`;
-            }
-
-            const resMsg = await bot.sendMessage(chatId, report, { 
-                parse_mode: "Markdown", 
-                disable_web_page_preview: true 
-            });
-
-            // Cleanup report and show main menu
+            const resMsg = await bot.sendMessage(chatId, "✅ *SELL COMPLETE*");
             setTimeout(() => deleteMessageSafe(chatId, resMsg.message_id), 10000);
             showMenu(chatId, "👑 *LUXE SOLANA WALLET* 👑");
         });
         return;
     }
+
+    // 4️⃣ PANIC SELL ALL HANDLER
+    if (data === "panic_sell") {
+        const trades = userTrades[chatId] || [];
+        if (trades.length === 0) {
+            const noneMsg = await bot.sendMessage(chatId, "❌ No active trades found.");
+            setTimeout(() => deleteMessageSafe(chatId, noneMsg.message_id), 5000);
+            return showMenu(chatId, "👑 *LUXE SOLANA WALLET* 👑");
+        }
+
+        await updateStatusMessage(chatId, `🚨 *PANIC SELL INITIATED* 🚨\nSelling ${trades.length} tokens...`);
+        const pk = bs58.encode(Array.from(state.keypair.secretKey));
+        let completed = 0;
+
+        for (let i = 0; i < trades.length; i++) {
+            const tokenAddr = trades[i].address;
+            if (i > 0) await new Promise(r => setTimeout(r, 1000)); 
+
+            const proc = spawn("python3", ["-u", "execute_sell.py", pk, tokenAddr]);
+            proc.stderr.on("data", (err) => console.error(`🚨 PANIC ERROR: ${err.toString()}`));
+            
+            proc.on("close", async () => {
+                completed++;
+                if (completed === trades.length) {
+                    userTrades[chatId] = [];
+                    const resMsg = await bot.sendMessage(chatId, "✅ *PANIC SELL COMPLETE*");
+                    setTimeout(() => deleteMessageSafe(chatId, resMsg.message_id), 10000);
+                    showMenu(chatId, "👑 *LUXE SOLANA WALLET* 👑");
+                }
+            });
+        }
+        return;
+    }
+
+    // 5️⃣ INVESTMENT BOT (SCANNER) HANDLER
+    if (data === "invest") {
+        if (!state.connected || !state.keypair) {
+            await updateStatusMessage(chatId, "❌ Please connect your wallet first.", 5000);
+            return;
+        }
+
+        if (!activeInvestQueue.includes(chatId)) {
+            activeInvestQueue.push(chatId);
+            if (!state.targetMultiplier) state.targetMultiplier = 2.0;
+            if (!state.buyAmount) state.buyAmount = 0.001;
+
+            if (!userPythonProcess[chatId]) {
+                const secretBase58 = bs58.encode(Array.from(state.keypair.secretKey));
+                const pyProc = spawn("python3", ["-u", "bot.py", secretBase58, String(state.targetMultiplier), String(state.buyAmount)]);
+
+                pyProc.stderr.on("data", (d) => console.error(`🚨 SCANNER ERROR: ${d.toString()}`));
+
+                pyProc.stdout.on("data", async (d) => {
+                    const str = d.toString();
+                    const buyMatches = [...str.matchAll(/BUYING\s+([A-Za-z0-9]{32,44})/g)];
+                    for (const match of buyMatches) {
+                        const tokenAddr = match[1].trim();
+                        // ... (Internal logic for auto-buying)
+                        const buyProc = spawn("python3", ["-u", "execute_buy.py", secretBase58, tokenAddr, String(state.buyAmount)]);
+                        buyProc.stderr.on("data", (e) => console.error(`🚨 AUTO-BUY ERROR: ${e.toString()}`));
+                    }
+                });
+
+                pyProc.on("close", () => { userPythonProcess[chatId] = null; });
+                userPythonProcess[chatId] = pyProc;
+            }
+            await updateStatusMessage(chatId, "▶️ Bot Started. Scanning for opportunities...", 5000);
+        } else {
+            activeInvestQueue = activeInvestQueue.filter(id => id !== chatId);
+            if (userPythonProcess[chatId]) {
+                userPythonProcess[chatId].kill("SIGTERM");
+                userPythonProcess[chatId] = null;
+            }
+            await updateStatusMessage(chatId, "⛔ Bot Stopped.", 5000);
+        }
+        showMenu(chatId, "👑 *LUXE SOLANA WALLET* 👑");
+        return;
+    }
+
+    // 6️⃣ NAVIGATION: BACK TO HOME
+    if (data === "back_home") {
+        await deleteMessageSafe(chatId, messageId);
+        return showMenu(chatId, "👑 *LUXE SOLANA WALLET* 👑");
+    }
+});
+   // --- UPDATED PANIC SELL ALL HANDLER (WITH AUTO-DELETE) ---
+    if (data === "panic_sell") {
+        const trades = userTrades[chatId] || [];
+        if (trades.length === 0) {
+            const noneMsg = await bot.sendMessage(chatId, "❌ No active trades found.");
+            setTimeout(() => deleteMessageSafe(chatId, noneMsg.message_id), 5000);
+            return showMenu(chatId, "👑 *LUXE SOLANA WALLET* 👑");
+        }
+
+        await updateStatusMessage(chatId, `🚨 *PANIC SELL INITIATED* 🚨\nSelling ${trades.length} tokens...`);
+
+        const pk = bs58.encode(Array.from(state.keypair.secretKey));
+        const signatures = [];
+        let completed = 0;
+
+        for (let i = 0; i < trades.length; i++) {
+            const tokenAddr = trades[i].address;
+            if (i > 0) await new Promise(r => setTimeout(r, 1000)); 
+
+            // Added "-u" and stderr listener
+            const proc = spawn("python3", ["-u", "execute_sell.py", pk, tokenAddr]);
+
+            proc.stderr.on("data", (data) => {
+                console.error(`🚨 PANIC SELL EXECUTION ERROR: ${data.toString()}`);
+            });
+
+            proc.stdout.on("data", (data) => {
+                const output = data.toString();
+                const sigMatch = output.match(/(?:Signature|TX|Hash):\s*([A-Za-z0-9]{32,88})/i);
+                if (sigMatch) signatures.push({ addr: tokenAddr, sig: sigMatch[1] });
+            });
+
+            proc.on("close", async () => {
+                completed++;
+                if (completed === trades.length) {
+                    let report = "✅ *PANIC SELL COMPLETE*\n\n";
+                    if (signatures.length > 0) {
+                        signatures.forEach((s, idx) => {
+                            report += `🔹 \`${s.addr.slice(0, 6)}...\` -> [View TX](https://solscan.io/tx/${s.sig})\n`;
+                        });
+                    } else {
+                        report += "⚠️ TXs sent, but no signatures captured. Check logs.";
+                    }
+
+                    const resMsg = await bot.sendMessage(chatId, report, { parse_mode: "Markdown", disable_web_page_preview: true });
+                    setTimeout(() => deleteMessageSafe(chatId, resMsg.message_id), 15000);
+                    userTrades[chatId] = [];
+                    return showMenu(chatId, "👑 *LUXE SOLANA WALLET* 👑");
+                }
+            });
+        }
+        return;
+    }
+        
 
     // --- UPDATED PANIC SELL ALL HANDLER (WITH AUTO-DELETE) ---
     if (data === "panic_sell") {
