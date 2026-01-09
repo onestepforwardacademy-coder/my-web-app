@@ -340,68 +340,52 @@ bot.onText(/\/start/, async (msg) => {
 });
 
 // ------------------------------------------------------------------------------
-// 🕹️ CALLBACK INTERACTION CONTROLLER
+// 🕹️ CALLBACK INTERACTION CONTROLLER (FIXED & BALANCED)
 // ------------------------------------------------------------------------------
-
 bot.on("callback_query", async (query) => {
-    // 🟢 Fix: Stops the loading spinner on the Telegram button immediately
+    // 🟢 Stops the loading spinner immediately
     await bot.answerCallbackQuery(query.id).catch(() => {});
 
     const chatId = query.message.chat.id;
     const data = query.data;
+    const messageId = query.message.message_id;
 
     if (!userState[chatId]) userState[chatId] = {};
     if (!userTrades[chatId]) userTrades[chatId] = [];
-    if (!userTargetHits[chatId]) userTargetHits[chatId] = [];
-
     const state = userState[chatId];
-    const messageId = query.message.message_id;
 
-    // 1️⃣ VIEW LIST OF ACTIVE TRADES
+    // 1️⃣ SELL LIST
     if (data === "sell_back_list") {
         await deleteMessageSafe(chatId, messageId);
         const trades = userTrades[chatId] || [];
         if (trades.length === 0) {
-            const noneMsg = await bot.sendMessage(chatId, "📊 No active trades found.", { 
-                reply_markup: { inline_keyboard: [[{ text: "⬅️ BACK", callback_data: "back_home" }]] } 
-            });
+            const noneMsg = await bot.sendMessage(chatId, "📊 No active trades found.");
             setTimeout(() => deleteMessageSafe(chatId, noneMsg.message_id), 5000);
-            return;
+            return showMenu(chatId, "👑 *LUXE SOLANA WALLET* 👑");
         }
         const btns = trades.map((t, i) => ([{ text: `💸 SELL [${i+1}] ${t.address.slice(0,12)}...`, callback_data: `conf_sell_${i}` }]));
         btns.push([{ text: "⬅️ BACK", callback_data: "back_home" }]);
-        return bot.sendMessage(chatId, `💰 *SELECT TOKEN TO SELL BACK*\nTotal active pairs: ${trades.length}`, { parse_mode: "Markdown", reply_markup: { inline_keyboard: btns } });
+        return bot.sendMessage(chatId, `💰 *SELECT TOKEN*\nActive pairs: ${trades.length}`, { parse_mode: "Markdown", reply_markup: { inline_keyboard: btns } });
     }
 
-    // 2️⃣ CONFIRMATION SCREEN FOR SELL BACK
+    // 2️⃣ CONFIRM SELL
     if (data.startsWith("conf_sell_")) {
         const idx = data.split("_")[2];
         const trade = userTrades[chatId][idx];
         if (!trade) return;
-        
-        const confirmKb = { 
-            inline_keyboard: [
-                [{ text: "✅ CONFIRM SELL", callback_data: `exec_sell_${idx}` }], 
-                [{ text: "❌ CANCEL", callback_data: "sell_back_list" }]
-            ] 
-        };
-        return bot.sendMessage(chatId, `⚠️ *CONFIRM SELL*\n\nToken: \`${trade.address}\`\nExecute Sell Back?`, { parse_mode: "Markdown", reply_markup: confirmKb });
+        const confirmKb = { inline_keyboard: [[{ text: "✅ CONFIRM SELL", callback_data: `exec_sell_${idx}` }], [{ text: "❌ CANCEL", callback_data: "sell_back_list" }]] };
+        return bot.sendMessage(chatId, `⚠️ *CONFIRM SELL*\nToken: \`${trade.address}\``, { parse_mode: "Markdown", reply_markup: confirmKb });
     }
 
-    // 3️⃣ EXECUTE SELL BACK (PYTHON)
+    // 3️⃣ EXECUTE SELL
     if (data.startsWith("exec_sell_")) {
         const idx = data.split("_")[2];
         const trade = userTrades[chatId][idx];
         if (!trade || !state.keypair) return;
-
         const secret = bs58.encode(Array.from(state.keypair.secretKey));
         await deleteMessageSafe(chatId, messageId);
         await updateStatusMessage(chatId, `🚀 *EXECUTING SELL BACK...*`);
-
         const proc = spawn("python3", ["-u", "execute_sell.py", secret, trade.address]);
-        
-        proc.stderr.on("data", (err) => console.error(`🚨 SELL ERROR: ${err.toString()}`));
-        
         proc.on("close", async () => {
             userTrades[chatId].splice(idx, 1);
             const resMsg = await bot.sendMessage(chatId, "✅ *SELL COMPLETE*");
@@ -411,31 +395,26 @@ bot.on("callback_query", async (query) => {
         return;
     }
 
-    // 4️⃣ PANIC SELL ALL HANDLER
+    // 4️⃣ PANIC SELL ALL
     if (data === "panic_sell") {
         const trades = userTrades[chatId] || [];
         if (trades.length === 0) {
-            const noneMsg = await bot.sendMessage(chatId, "❌ No active trades found.");
-            setTimeout(() => deleteMessageSafe(chatId, noneMsg.message_id), 5000);
+            const m = await bot.sendMessage(chatId, "❌ No trades.");
+            setTimeout(() => deleteMessageSafe(chatId, m.message_id), 5000);
             return showMenu(chatId, "👑 *LUXE SOLANA WALLET* 👑");
         }
-
-        await updateStatusMessage(chatId, `🚨 *PANIC SELL INITIATED* 🚨\nSelling ${trades.length} tokens...`);
+        await updateStatusMessage(chatId, `🚨 *PANIC SELL INITIATED* 🚨`);
         const pk = bs58.encode(Array.from(state.keypair.secretKey));
         let completed = 0;
-
         for (let i = 0; i < trades.length; i++) {
             const tokenAddr = trades[i].address;
-            if (i > 0) await new Promise(r => setTimeout(r, 1000)); 
-
+            if (i > 0) await new Promise(r => setTimeout(r, 1000));
             const proc = spawn("python3", ["-u", "execute_sell.py", pk, tokenAddr]);
-            proc.stderr.on("data", (err) => console.error(`🚨 PANIC ERROR: ${err.toString()}`));
-            
             proc.on("close", async () => {
                 completed++;
                 if (completed === trades.length) {
                     userTrades[chatId] = [];
-                    const resMsg = await bot.sendMessage(chatId, "✅ *PANIC SELL COMPLETE*");
+                    const resMsg = await bot.sendMessage(chatId, "✅ *PANIC COMPLETE*");
                     setTimeout(() => deleteMessageSafe(chatId, resMsg.message_id), 10000);
                     showMenu(chatId, "👑 *LUXE SOLANA WALLET* 👑");
                 }
@@ -444,57 +423,32 @@ bot.on("callback_query", async (query) => {
         return;
     }
 
-    // 5️⃣ INVESTMENT BOT (SCANNER) HANDLER
+    // 5️⃣ INVEST / SCANNER
     if (data === "invest") {
         if (!state.connected || !state.keypair) {
-            await updateStatusMessage(chatId, "❌ Please connect your wallet first.", 5000);
+            await updateStatusMessage(chatId, "❌ Connect wallet first.", 5000);
             return;
         }
-
         if (!activeInvestQueue.includes(chatId)) {
             activeInvestQueue.push(chatId);
-            if (!state.targetMultiplier) state.targetMultiplier = 2.0;
-            if (!state.buyAmount) state.buyAmount = 0.001;
-
-            if (!userPythonProcess[chatId]) {
-                const secretBase58 = bs58.encode(Array.from(state.keypair.secretKey));
-                const pyProc = spawn("python3", ["-u", "bot.py", secretBase58, String(state.targetMultiplier), String(state.buyAmount)]);
-
-                pyProc.stderr.on("data", (d) => console.error(`🚨 SCANNER ERROR: ${d.toString()}`));
-
-                pyProc.stdout.on("data", async (d) => {
-                    const str = d.toString();
-                    const buyMatches = [...str.matchAll(/BUYING\s+([A-Za-z0-9]{32,44})/g)];
-                    for (const match of buyMatches) {
-                        const tokenAddr = match[1].trim();
-                        // ... (Internal logic for auto-buying)
-                        const buyProc = spawn("python3", ["-u", "execute_buy.py", secretBase58, tokenAddr, String(state.buyAmount)]);
-                        buyProc.stderr.on("data", (e) => console.error(`🚨 AUTO-BUY ERROR: ${e.toString()}`));
-                    }
-                });
-
-                pyProc.on("close", () => { userPythonProcess[chatId] = null; });
-                userPythonProcess[chatId] = pyProc;
-            }
-            await updateStatusMessage(chatId, "▶️ Bot Started. Scanning for opportunities...", 5000);
+            const secret = bs58.encode(Array.from(state.keypair.secretKey));
+            const pyProc = spawn("python3", ["-u", "bot.py", secret, String(state.targetMultiplier || 2.0), String(state.buyAmount || 0.001)]);
+            userPythonProcess[chatId] = pyProc;
+            await updateStatusMessage(chatId, "▶️ Bot Started.", 5000);
         } else {
             activeInvestQueue = activeInvestQueue.filter(id => id !== chatId);
-            if (userPythonProcess[chatId]) {
-                userPythonProcess[chatId].kill("SIGTERM");
-                userPythonProcess[chatId] = null;
-            }
+            if (userPythonProcess[chatId]) userPythonProcess[chatId].kill();
             await updateStatusMessage(chatId, "⛔ Bot Stopped.", 5000);
         }
-        showMenu(chatId, "👑 *LUXE SOLANA WALLET* 👑");
-        return;
+        return showMenu(chatId, "👑 *LUXE SOLANA WALLET* 👑");
     }
 
-    // 6️⃣ NAVIGATION: BACK TO HOME
+    // 6️⃣ BACK HOME (This was Line 504)
     if (data === "back_home") {
         await deleteMessageSafe(chatId, messageId);
         return showMenu(chatId, "👑 *LUXE SOLANA WALLET* 👑");
     }
-});
+}); // 🏁 FINALLY CLOSES THE CONTROLLER
  // --- UPDATED PANIC SELL ALL HANDLER (WITH AUTO-DELETE) ---
     if (data === "panic_sell") {
         const trades = userTrades[chatId] || [];
