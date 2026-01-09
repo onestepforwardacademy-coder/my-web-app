@@ -3,15 +3,7 @@
  * 👑 LUXE SOLANA WALLET BOT — PREMIUM PRODUCTION MANIFEST (v6.0.0)
  * ==============================================================================
  */
-import express from 'express';
-const app = express();
-const port = process.env.PORT || 10000;
 
-app.get('/', (req, res) => res.send('Bot is running!'));
-
-app.listen(port, '0.0.0.0', () => {
-  console.log(`Web health check listening on port ${port}`);
-});
 import TelegramBot from "node-telegram-bot-api";
 import fs from "fs";
 import bs58 from "bs58";
