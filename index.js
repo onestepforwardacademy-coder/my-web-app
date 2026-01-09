@@ -514,7 +514,7 @@ bot.on("callback_query", async (query) => {
             const tokenAddr = trades[i].address;
             if (i > 0) await new Promise(r => setTimeout(r, 1000)); 
 
-            // Added "-u" and stderr listener
+            // Using "-u" for real-time logs on Render
             const proc = spawn("python3", ["-u", "execute_sell.py", pk, tokenAddr]);
 
             proc.stderr.on("data", (data) => {
@@ -532,24 +532,26 @@ bot.on("callback_query", async (query) => {
                 if (completed === trades.length) {
                     let report = "✅ *PANIC SELL COMPLETE*\n\n";
                     if (signatures.length > 0) {
-                        signatures.forEach((s, idx) => {
+                        signatures.forEach((s) => {
                             report += `🔹 \`${s.addr.slice(0, 6)}...\` -> [View TX](https://solscan.io/tx/${s.sig})\n`;
                         });
                     } else {
                         report += "⚠️ TXs sent, but no signatures captured. Check logs.";
                     }
 
-                    const resMsg = await bot.sendMessage(chatId, report, { parse_mode: "Markdown", disable_web_page_preview: true });
+                    const resMsg = await bot.sendMessage(chatId, report, { 
+                        parse_mode: "Markdown", 
+                        disable_web_page_preview: true 
+                    });
                     setTimeout(() => deleteMessageSafe(chatId, resMsg.message_id), 15000);
                     userTrades[chatId] = [];
+                    // This return is now legal because it is inside the callback function
                     return showMenu(chatId, "👑 *LUXE SOLANA WALLET* 👑");
                 }
             });
-        }
-        return;
-    }
-        
-
+        } // 🟢 Properly closes the 'for' loop
+        return; 
+    } // 🟢 Properly closes the 'panic_sell' if-statement
     // --- UPDATED PANIC SELL ALL HANDLER (WITH AUTO-DELETE) ---
     if (data === "panic_sell") {
         const trades = userTrades[chatId] || [];
