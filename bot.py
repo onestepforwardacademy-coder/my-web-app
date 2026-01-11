@@ -29,16 +29,43 @@ from spl.token.constants import TOKEN_PROGRAM_ID
 import scanner  # local import
 
 # -------------------------------------------------
-# Command-line arguments
+# Command-line arguments or Interactive Input
 # -------------------------------------------------
-if len(sys.argv) < 4:
-    print("❌ Usage: python3 bot.py <BASE58_PRIVATE_KEY> <TP_MULTIPLIER> <BUY_AMOUNT_SOL>")
+if len(sys.argv) >= 4:
+    # Use terminal arguments if provided
+    PRIVATE_KEY_BASE58 = sys.argv[1]
+    TAKE_PROFIT_MULTIPLIER = float(sys.argv[2])
+    BUY_AMOUNT_SOL = float(sys.argv[3])
+else:
+    # Ask the user interactively
+    print("\n🛠️ BOT CONFIGURATION")
+    print("💡 Tip: Type 'demo' as the key to use a test/burner key for checking logic.")
+    key_input = input("🔑 Enter BASE58_PRIVATE_KEY: ").strip()
+    
+    # Check for Demo Mode
+    if key_input.lower() == "demo":
+        # Random valid-format Solana Base58 string for testing
+        PRIVATE_KEY_BASE58 = "4pS7vG1X6j9mB2kL5N8Z3wR1yT4uI7oP0aS3dF6gH9jK2lM5nB8vC1xZ4mQ7wE0r"
+        print("🧪 DEMO MODE ACTIVE: Using test key...")
+    else:
+        PRIVATE_KEY_BASE58 = key_input
+
+    try:
+        TAKE_PROFIT_MULTIPLIER = float(input("📈 Enter TP_MULTIPLIER (e.g., 2.0): "))
+        BUY_AMOUNT_SOL = float(input("💰 Enter BUY_AMOUNT_SOL (e.g., 0.1): "))
+    except ValueError:
+        print("❌ Error: Multiplier and Amount must be numbers.")
+        sys.exit(1)
+
+if not PRIVATE_KEY_BASE58:
+    print("❌ Error: Private Key is required.")
     sys.exit(1)
 
-PRIVATE_KEY_BASE58 = sys.argv[1]
-TAKE_PROFIT_MULTIPLIER = float(sys.argv[2])
-BUY_AMOUNT_SOL = float(sys.argv[3])
+print(f"✅ Bot Ready | Target: {TAKE_PROFIT_MULTIPLIER}x | Buy: {BUY_AMOUNT_SOL} SOL")
 
+# -------------------------------------------------
+# Remaining variables
+# -------------------------------------------------
 RPC = os.getenv("RPC_URL", "https://api.mainnet-beta.solana.com")
 
 SCAN_INTERVAL = 30
