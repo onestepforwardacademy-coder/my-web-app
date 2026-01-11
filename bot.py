@@ -1,3 +1,4 @@
+# bot.py
 # Orchestrator: buy/sell logic, tracking, and main continuous loop.
 # Uses scanner.py to scan tokens and main.py for Rug Pull check via subprocess
 
@@ -338,51 +339,15 @@ def buy_if_safe(token_mint: str):
         price = get_token_price(token_mint)
         tracked_tokens[token_mint] = {
             "entry_price": price,
-            "target_price": price * TAKE_PROFIT_MULTIPLIER,
+            "target_price": price * TAKE_PROFIT_MULTIPLIER if price else 0,
             "status": "held"
         }
+        # REMOVE from list so scanner doesn't pick it up again
         if token_mint in scanner.new_pairs_to_buy:
             scanner.new_pairs_to_buy.remove(token_mint)
 
 # -------------------------------------------------
-# Main Loop (Original)
-# -------------------------------------------------
-def main():
-    print("\n🔁 BOT STARTED (LEGACY MODE)")
-    while True:
-        # Monitoring logic from the provided code
-        for token in list(tracked_tokens.keys()):
-            data = fetch_jupiter_token_info(token)
-            if data:
-                intervals = ['stats5m', 'stats1h', 'stats6h', 'stats24h']
-                is_crashing = any(data.get(k, {}).get('priceChange', 0) <= -70 for k in intervals)
-                current_price = data.get('usdPrice', 0)
-                is_tp_hit = current_price >= tracked_tokens[token]["target_price"]
-
-                if is_crashing or is_tp_hit:
-                    sell_reason = "CRASH DETECTED" if is_crashing else "TARGET HIT"
-                    if sell_swap(token, reason=sell_reason):
-                        del tracked_tokens[token]
-            else:
-                price = get_token_price(token)
-                if price and price >= tracked_tokens[token]["target_price"]:
-                    if sell_swap(token):
-                        del tracked_tokens[token]
-
-        if scanner.new_pairs_to_buy:
-            for token in list(scanner.new_pairs_to_buy):
-                buy_if_safe(token)
-                time.sleep(5)
-
-        try:
-            scanner.run_scan_and_search()
-        except Exception as e:
-            print(f"❌ Scan error: {e}")
-
-        time.sleep(MONITOR_INTERVAL)
-
-# -------------------------------------------------
-# 2026 UPDATED LOGIC
+# 2026 UPDATED LOGIC (Standard Loop)
 # -------------------------------------------------
 
 def emergency_exit_check(data, token_mint):
@@ -410,29 +375,33 @@ def run_emergency_system():
                     continue
 
                 current_price = data.get('usdPrice', 0)
-                is_tp_hit = current_price >= tracked_tokens[token]["target_price"]
+                # Safeguard check for target price
+                target = tracked_tokens[token].get("target_price", 0)
+                is_tp_hit = current_price >= target if target > 0 else False
 
                 if is_tp_hit:
                     if sell_swap(token, reason="🎯 TARGET HIT"):
                         if token in tracked_tokens: del tracked_tokens[token]
             else:
                 price = get_token_price(token)
-                if price and price >= tracked_tokens[token]["target_price"]:
+                target = tracked_tokens[token].get("target_price", 0)
+                if price and target > 0 and price >= target:
                     if sell_swap(token, reason="🎯 TARGET HIT (DexFallback)"):
                         if token in tracked_tokens: del tracked_tokens[token]
 
-        # 2. Buying logic (Scanner)
-        if scanner.new_pairs_to_buy:
-            for token in list(scanner.new_pairs_to_buy):
-                buy_if_safe(token)
-                time.sleep(2)
-
-        # 3. Scanning logic
+        # 2. Scanning logic (Communication with scanner.py)
         try:
-            # Running the actual scan function from your scanner.py
+            # Calling the actual function to fetch new tokens
             scanner.run_scan_and_search()
         except Exception as e:
             print(f"⚠️ Scanner cycle error: {e}")
+
+        # 3. Buying logic (Process new tokens found by scanner)
+        if scanner.new_pairs_to_buy:
+            # Create a copy of the list to iterate to avoid modification errors
+            for token in list(scanner.new_pairs_to_buy):
+                buy_if_safe(token)
+                time.sleep(2)
 
         time.sleep(MONITOR_INTERVAL)
 
