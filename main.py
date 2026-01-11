@@ -1,7 +1,4 @@
 # main.py
-# Selenium Rug Pull checker for ave.ai
-# Output format is STRICTLY designed for bot.py parsing
-
 import sys
 import time
 import re
@@ -12,10 +9,9 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import TimeoutException, NoSuchElementException
 
 # -------------------------------------------------
-# Validate argument
+# 1. Setup & Arguments
 # -------------------------------------------------
 if len(sys.argv) < 2:
     print("ERROR: No token address provided")
@@ -25,99 +21,80 @@ token_address = sys.argv[1]
 url = f"https://ave.ai/token/{token_address}-solana?from=Home"
 
 # -------------------------------------------------
-# Chromium paths (Replit)
-# -------------------------------------------------
-CHROME_PATH = "/nix/store/zi4f80l169xlmivz8vja8wlphq74qqk0-chromium-125.0.6422.141/bin/chromium"
-CHROMEDRIVER_PATH = "/nix/store/3qnxr5x6gw3k9a9i7d0akz0m6bksbwff-chromedriver-125.0.6422.141/bin/chromedriver"
-
-# -------------------------------------------------
-# Chrome options
+# 2. Chrome Options (VPS Optimized)
 # -------------------------------------------------
 options = Options()
-options.binary_location = CHROME_PATH
 options.add_argument("--headless=new")
 options.add_argument("--no-sandbox")
 options.add_argument("--disable-dev-shm-usage")
 options.add_argument("--disable-gpu")
-options.add_argument("--disable-blink-features=AutomationControlled")
 options.add_argument("--window-size=1920,1080")
+# Crucial: Spoof a real browser to avoid "Bot Detected" screens
+options.add_argument("--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+options.add_experimental_option("excludeSwitches", ["enable-automation"])
+options.add_experimental_option('useAutomationExtension', False)
 
 # -------------------------------------------------
-# Start driver
+# 3. Start Driver (Dynamic Pathing)
 # -------------------------------------------------
-service = Service(CHROMEDRIVER_PATH)
-driver = webdriver.Chrome(service=service, options=options)
+# Selenium 4.x automatically finds the driver; no path needed
+driver = webdriver.Chrome(options=options)
 
 try:
     print(f"\n🔎 Checking token: {token_address}")
-    print(f"🌐 URL: {url}")
-
     driver.get(url)
-    print("⏳ Waiting for page load...")
-    time.sleep(10)
+    
+    # Ave.ai needs time to render Javascript
+    print("⏳ Waiting for page to stabilize...")
+    time.sleep(12)
 
     # -------------------------------------------------
-    # Dismiss modal if present
+    # 4. Dismiss Popups (The Logic Fix)
     # -------------------------------------------------
-    BUTTON_XPATH = "//*[contains(text(),'Start experiencing')]"
-
     try:
+        # Use a broad ESCAPE key hit to clear any overlays
         driver.find_element(By.TAG_NAME, "body").send_keys(Keys.ESCAPE)
-        WebDriverWait(driver, 3).until(
-            EC.invisibility_of_element_located((By.XPATH, BUTTON_XPATH))
-        )
-        print("🪟 Modal dismissed (ESC)")
+        time.sleep(1)
     except:
-        try:
-            btn = WebDriverWait(driver, 5).until(
-                EC.element_to_be_clickable((By.XPATH, BUTTON_XPATH))
-            )
-            driver.execute_script("arguments[0].click();", btn)
-            print("🪟 Modal dismissed (CLICK)")
-            time.sleep(2)
-        except:
-            print("ℹ️ No modal detected")
+        pass
 
     # -------------------------------------------------
-    # Extract Rug Pull %
+    # 5. Extract Rug Pull % (Advanced XPATH)
     # -------------------------------------------------
-    print("\n📊 Extracting Rug Pull percentage...")
+    # We look for the text "Rug Pull" and find the very next element containing '%'
+    RUG_XPATH = "//*[contains(text(),'Rug Pull')]/following::*[contains(text(),'%')][1]"
+    
+    print("📊 Searching for Rug Pull element...")
+    wait = WebDriverWait(driver, 20)
+    percent_element = wait.until(EC.presence_of_element_located((By.XPATH, RUG_XPATH)))
+    
+    raw_text = percent_element.text.strip()
+    print(f"🔍 Raw text found: {raw_text}")
 
-    RUG_XPATH = (
-        "//*[contains(text(),'Rug Pull')]"
-        "/following::*[contains(text(),'%')][1]"
-    )
-
-    percent_element = WebDriverWait(driver, 20).until(
-        EC.visibility_of_element_located((By.XPATH, RUG_XPATH))
-    )
-
-    text = percent_element.text.strip()
-    print(f"🔍 Raw text: {text}")
-
-    match = re.search(r'([0-9]+(?:\.[0-9]+)?)%', text)
+    # Regex to extract just the number
+    match = re.search(r'([0-9]+(?:\.[0-9]+)?)%', raw_text)
 
     if not match:
-        print("ERROR: Rug Pull Percentage not found")
-        sys.exit(0)
+        # Fallback: Sometimes it's inside a different child element
+        print("⚠️ Direct match failed, trying broader search...")
+        raw_text = driver.find_element(By.XPATH, "//*[contains(text(),'Rug Pull')]/..").text
+        match = re.search(r'([0-9]+(?:\.[0-9]+)?)%', raw_text)
 
-    rug_percent = float(match.group(1))
-
-    # -------------------------------------------------
-    # FINAL OUTPUT (DO NOT CHANGE FORMAT)
-    # -------------------------------------------------
-    print(f"\nRug Pull Percentage: {rug_percent}%")
-
-    if 0 <= rug_percent <= 55:
-        print("DECISION: BUY")
+    if match:
+        rug_percent = float(match.group(1))
+        print(f"\nRug Pull Percentage: {rug_percent}%")
+        
+        # -------------------------------------------------
+        # 6. FINAL OUTPUT (STRICT FORMAT)
+        # -------------------------------------------------
+        if 0 <= rug_percent <= 55:
+            print("DECISION: BUY")
+        else:
+            print("DECISION: SKIP")
     else:
-        print("DECISION: SKIP")
+        print("ERROR: Rug Pull Percentage not found in text")
 
-except TimeoutException:
-    print("ERROR: Timeout while extracting Rug Pull")
-except NoSuchElementException:
-    print("ERROR: Rug Pull element not found")
 except Exception as e:
-    print(f"ERROR: {e}")
+    print(f"❌ ERROR: {str(e)}")
 finally:
     driver.quit()
