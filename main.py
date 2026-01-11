@@ -25,9 +25,10 @@ token_address = sys.argv[1]
 url = f"https://ave.ai/token/{token_address}-solana?from=Home"
 
 # -------------------------------------------------
-# Chromium paths (Corrected for VPS)
+# Chromium paths (DIRECT VPS PATHS)
 # -------------------------------------------------
-CHROME_PATH = "/usr/bin/google-chrome"
+# We use 'google-chrome-stable' which is the actual filename on Ubuntu
+CHROME_PATH = "/usr/bin/google-chrome-stable"
 CHROMEDRIVER_PATH = "/usr/bin/chromedriver"
 
 # -------------------------------------------------
@@ -36,12 +37,11 @@ CHROMEDRIVER_PATH = "/usr/bin/chromedriver"
 options = Options()
 options.binary_location = CHROME_PATH
 options.add_argument("--headless=new")
-options.add_argument("--no-sandbox")           # Required for VPS Root
-options.add_argument("--disable-dev-shm-usage") # Prevents memory crashes
+options.add_argument("--no-sandbox")            # Fixes permission issues on VPS
+options.add_argument("--disable-dev-shm-usage")  # Fixes memory/session issues
 options.add_argument("--disable-gpu")
 options.add_argument("--disable-blink-features=AutomationControlled")
 options.add_argument("--window-size=1920,1080")
-# Added User-Agent to prevent Ave.ai from blocking the bot
 options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
 
 # -------------------------------------------------
@@ -56,13 +56,11 @@ try:
 
     driver.get(url)
     print("⏳ Waiting for page load...")
-    time.sleep(12) # Increased slightly for slow VPS network
+    time.sleep(12)
 
     # -------------------------------------------------
     # Dismiss modal if present
     # -------------------------------------------------
-    BUTTON_XPATH = "//*[contains(text(),'Start experiencing')]"
-
     try:
         driver.find_element(By.TAG_NAME, "body").send_keys(Keys.ESCAPE)
         print("🪟 Modal dismissed (ESC)")
@@ -74,7 +72,6 @@ try:
     # -------------------------------------------------
     print("\n📊 Extracting Rug Pull percentage...")
 
-    # Robust XPATH to find the % next to Rug Pull
     RUG_XPATH = "//*[contains(text(),'Rug Pull')]/following::*[contains(text(),'%')][1]"
 
     percent_element = WebDriverWait(driver, 25).until(
@@ -93,7 +90,7 @@ try:
     rug_percent = float(match.group(1))
 
     # -------------------------------------------------
-    # FINAL OUTPUT (DO NOT CHANGE FORMAT)
+    # FINAL OUTPUT
     # -------------------------------------------------
     print(f"\nRug Pull Percentage: {rug_percent}%")
 
@@ -104,8 +101,6 @@ try:
 
 except TimeoutException:
     print("ERROR: Timeout while extracting Rug Pull")
-except NoSuchElementException:
-    print("ERROR: Rug Pull element not found")
 except Exception as e:
     print(f"ERROR: {e}")
 finally:
