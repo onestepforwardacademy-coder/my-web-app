@@ -15,6 +15,9 @@ import pytesseract
 import os
 from typing import List, Tuple, Optional, Dict
 
+# Keep your existing driver manager import for path fixes
+from webdriver_manager.chrome import ChromeDriverManager
+
 SEEN_PAIRS_FILE = "seen_pairs.txt"
 
 # ----- memory helpers -----
@@ -131,7 +134,6 @@ def search_solana_by_mint(token_mint: str) -> None:
         url = p.get("url")
         token_age = format_age_dynamic(p.get("pairCreatedAt"))
 
-        # ---- NEW: Check if token address ends with "pump" ----
         if not token_mint.endswith("pump"):
             print(f"⚠️ SCAM TOKEN DETECTED: {token_mint} — do NOT buy!")
             continue
@@ -160,29 +162,28 @@ def search_solana_by_mint(token_mint: str) -> None:
 # ----- Selenium + OCR screenshot and parse -----
 def run_selenium_screenshot(
     screenshot_path: str = "/tmp/dexscreener_full_screenshot.png",
-    headless: bool = True,
-    # Updated default paths for standard Ubuntu VPS
-    chromedriver_path: str = "/usr/bin/chromedriver",
-    chromium_path: str = "/usr/bin/chromium-browser"
+    headless: bool = True
 ) -> str:
     from selenium.webdriver.chrome.options import Options
 
     chrome_options = Options()
-    # Check if binary exists, otherwise Selenium will try to find it in PATH
-    if os.path.exists(chromium_path):
-        chrome_options.binary_location = chromium_path
+    
+    # DYNAMIC BINARY DETECTION (Fixes the crash)
+    vps_path = "/usr/bin/google-chrome"
+    if os.path.exists(vps_path):
+        chrome_options.binary_location = vps_path
     
     if headless:
         chrome_options.add_argument("--headless=new")
     
-    # Required flags for running in a Docker/VPS environment
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
     chrome_options.add_argument("--disable-gpu") 
     chrome_options.add_argument("--window-size=1920,10800")
     chrome_options.add_argument("user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36")
 
-    service = Service(chromedriver_path)
+    # DYNAMIC DRIVER DETECTION (No more hardcoded paths)
+    service = Service(ChromeDriverManager().install())
     driver = webdriver.Chrome(service=service, options=chrome_options)
 
     try:
@@ -193,7 +194,7 @@ def run_selenium_screenshot(
 
         # Infinite scroll handling
         last_height = driver.execute_script("return document.body.scrollHeight")
-        for _ in range(3): # Scroll a few times to load initial content
+        for _ in range(3): 
             driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
             time.sleep(2)
             new_height = driver.execute_script("return document.body.scrollHeight")
@@ -210,7 +211,7 @@ def run_selenium_screenshot(
 
 def ocr_extract_pair_symbols(screenshot_path: str) -> List[str]:
     img = PILImage.open(screenshot_path)
-    img = img.convert('L') # Grayscale
+    img = img.convert('L') 
     img = img.resize((img.width*2, img.height*2))
     enhancer = ImageEnhance.Contrast(img)
     img = enhancer.enhance(2.0)
@@ -230,20 +231,11 @@ def ocr_extract_pair_symbols(screenshot_path: str) -> List[str]:
     pair_symbols = list(dict.fromkeys(pair_symbols))
     return pair_symbols
 
-def run_scan_and_search(
-    screenshot_path: str = "/tmp/dexscreener_full_screenshot.png",
-    # Updated default paths for standard Ubuntu VPS
-    chromedriver_path: str = "/usr/bin/chromedriver",
-    chromium_path: str = "/usr/bin/chromium-browser"
-) -> List[str]:
+def run_scan_and_search() -> List[str]:
     global new_pairs_to_buy
     new_pairs_to_buy = []
 
-    shot = run_selenium_screenshot(
-        screenshot_path=screenshot_path,
-        chromedriver_path=chromedriver_path,
-        chromium_path=chromium_path
-    )
+    shot = run_selenium_screenshot()
     pair_symbols = ocr_extract_pair_symbols(shot)
     print(f"✅ Found {len(pair_symbols)} total pair symbols. Searching profiles...\n")
 
