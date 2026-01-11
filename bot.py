@@ -68,7 +68,6 @@ def fetch_jupiter_token_info(mint_address):
 
 def close_ata_reclaim_rent(token_mint: str):
     """Closes ATA to get back the ~0.002 SOL rent fee. Burns any 'dust' first."""
-    # Logic moved inside the Two-Pass loop for better stability
     pass
 
 def get_token_price(token_address: str):
@@ -187,13 +186,10 @@ def sell_swap(token_mint: str, reason="TARGET") -> bool:
 
     success_at_least_once = False
 
-    # --- AUTOMATIC TWO-PASS LOOP ---
     for attempt in range(1, 3):
         print(f"\n🔄 [RUN {attempt}/2] Processing: {token_mint}")
-
         details = get_actual_token_balance_info(str(owner_pubkey), token_mint)
 
-        # If no account exists on second pass, we are finished
         if not details.get('ata'):
             if attempt == 2:
                 print(f"✅ Reclaim verified. Account successfully closed.")
@@ -201,11 +197,8 @@ def sell_swap(token_mint: str, reason="TARGET") -> bool:
                 print(f"❌ No token account found for {token_mint}")
             break
 
-        # 1. SELL BALANCE (Only if tokens exist)
         if details['amount'] > 0:
             print(f"💰 Current Balance: {details.get('ui_amount', 0)}. Selling via Jupiter...")
-
-            # Crash slippage vs standard
             slippage = 2500 if reason in ["EMERGENCY_EXIT", "CRASH DETECTED"] else 1500
 
             quote_url = (
@@ -241,8 +234,6 @@ def sell_swap(token_mint: str, reason="TARGET") -> bool:
             except Exception as e: 
                 print(f"❌ Sell Pass Error: {e}")
 
-        # 2. FINAL RECLAIM (Burn + Close)
-        # Refresh details after the sell
         final_info = get_actual_token_balance_info(str(owner_pubkey), token_mint)
         if not final_info.get('ata'): continue
 
@@ -252,7 +243,6 @@ def sell_swap(token_mint: str, reason="TARGET") -> bool:
             recent_blockhash = Hash.from_string(bh_resp["result"]["value"]["blockhash"])
             instructions = []
 
-            # Dust management: Burn anything left over to avoid 0x11 error
             if final_info['amount'] > 0:
                 print(f"🔥 Burning {final_info['amount']} units of dust...")
                 instructions.append(burn(BurnParams(
@@ -283,7 +273,7 @@ def sell_swap(token_mint: str, reason="TARGET") -> bool:
             else:
                 print(f"⚠️ Reclaim incomplete: {send_reclaim.get('error')}")
 
-            time.sleep(2) # Cooldown before second pass
+            time.sleep(2) 
         except Exception as e: 
             print(f"❌ Reclaim Error: {e}")
 
@@ -327,10 +317,8 @@ def get_rug_pull_from_main(token_address: str) -> float | None:
 def buy_if_safe(token_mint: str):
     if not token_mint.endswith("pump"):
         print(f"⚠️ SCAM TOKEN DETECTED: {token_mint} — SKIPPING BUY")
-        try:
+        if token_mint in scanner.new_pairs_to_buy:
             scanner.new_pairs_to_buy.remove(token_mint)
-        except ValueError:
-            pass
         return
 
     rug = get_rug_pull_from_main(token_mint)
@@ -341,6 +329,8 @@ def buy_if_safe(token_mint: str):
 
     if rug > 55:
         print(f"🔴 Rug {rug}% — SKIP BUY")
+        if token_mint in scanner.new_pairs_to_buy:
+            scanner.new_pairs_to_buy.remove(token_mint)
         return
 
     print(f"🟢 Rug {rug}% — BUYING")
@@ -351,28 +341,21 @@ def buy_if_safe(token_mint: str):
             "target_price": price * TAKE_PROFIT_MULTIPLIER,
             "status": "held"
         }
-        try:
+        if token_mint in scanner.new_pairs_to_buy:
             scanner.new_pairs_to_buy.remove(token_mint)
-        except ValueError:
-            pass
 
 # -------------------------------------------------
-# Main Loop (Original) - Kept for Reference
+# Main Loop (Original)
 # -------------------------------------------------
 def main():
     print("\n🔁 BOT STARTED (LEGACY MODE)")
-
     while True:
-        # Monitor tracked tokens
+        # Monitoring logic from the provided code
         for token in list(tracked_tokens.keys()):
             data = fetch_jupiter_token_info(token)
-
             if data:
-                # Emergency Exit (-70% to -100%) in all timeframes
                 intervals = ['stats5m', 'stats1h', 'stats6h', 'stats24h']
                 is_crashing = any(data.get(k, {}).get('priceChange', 0) <= -70 for k in intervals)
-
-                # Check for Target Price Hit
                 current_price = data.get('usdPrice', 0)
                 is_tp_hit = current_price >= tracked_tokens[token]["target_price"]
 
@@ -381,19 +364,16 @@ def main():
                     if sell_swap(token, reason=sell_reason):
                         del tracked_tokens[token]
             else:
-                # Fallback to DexScreener price check if Jupiter fails
                 price = get_token_price(token)
                 if price and price >= tracked_tokens[token]["target_price"]:
                     if sell_swap(token):
                         del tracked_tokens[token]
 
-        # Buy new pairs safely
         if scanner.new_pairs_to_buy:
             for token in list(scanner.new_pairs_to_buy):
                 buy_if_safe(token)
                 time.sleep(5)
 
-        # Scheduled scan
         try:
             scanner.run_scan_and_search()
         except Exception as e:
@@ -406,31 +386,29 @@ def main():
 # -------------------------------------------------
 
 def emergency_exit_check(data, token_mint):
-    """Rule [2026-01-02]: Check for -70% drop across all Jupiter timeframes."""
+    """Rule [2026-01-02]: Check for -40% drop across all Jupiter timeframes."""
     intervals = ['stats5m', 'stats1h', 'stats6h', 'stats24h']
     is_crashing = any(data.get(k, {}).get('priceChange', 0) <= -40 for k in intervals)
 
     if is_crashing:
-        print(f"🚨 EMERGENCY EXIT TRIGGERED: {token_mint} dropped -70%!")
+        print(f"🚨 EMERGENCY EXIT TRIGGERED: {token_mint} dropped -40%!")
         if sell_swap(token_mint, reason="EMERGENCY_EXIT"):
             return True
     return False
 
 def run_emergency_system():
     """Updated 2026 main loop that replaces the standard main()."""
-    print("\n🚀 BOT STARTED WITH EMERGENCY EXIT (-70%) ACTIVE")
+    print("\n🚀 BOT STARTED WITH EMERGENCY EXIT (-40%) ACTIVE")
 
     while True:
         # 1. Monitoring & Emergency Exit logic
         for token in list(tracked_tokens.keys()):
             data = fetch_jupiter_token_info(token)
             if data:
-                # Check for -70% drop (Emergency Exit)
                 if emergency_exit_check(data, token):
                     if token in tracked_tokens: del tracked_tokens[token]
                     continue
 
-                # Check Target Price
                 current_price = data.get('usdPrice', 0)
                 is_tp_hit = current_price >= tracked_tokens[token]["target_price"]
 
@@ -438,10 +416,9 @@ def run_emergency_system():
                     if sell_swap(token, reason="🎯 TARGET HIT"):
                         if token in tracked_tokens: del tracked_tokens[token]
             else:
-                # Fallback to DexScreener
                 price = get_token_price(token)
                 if price and price >= tracked_tokens[token]["target_price"]:
-                    if sell_swap(token):
+                    if sell_swap(token, reason="🎯 TARGET HIT (DexFallback)"):
                         if token in tracked_tokens: del tracked_tokens[token]
 
         # 2. Buying logic (Scanner)
@@ -452,9 +429,10 @@ def run_emergency_system():
 
         # 3. Scanning logic
         try:
+            # Running the actual scan function from your scanner.py
             scanner.run_scan_and_search()
-        except:
-            pass
+        except Exception as e:
+            print(f"⚠️ Scanner cycle error: {e}")
 
         time.sleep(MONITOR_INTERVAL)
 
@@ -462,6 +440,4 @@ def run_emergency_system():
 # Entry Point
 # -------------------------------------------------
 if __name__ == "__main__":
-    # We call run_emergency_system() instead of main() 
-    # to activate the 2026 rules without deleting your main() code.
     run_emergency_system()
