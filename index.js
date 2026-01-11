@@ -15,7 +15,7 @@ import { derivePath } from "ed25519-hd-key";
 // ------------------------------------------------------------------------------
 // ⚙️ SYSTEM CONFIGURATION & CONSTANTS
 // ------------------------------------------------------------------------------
-const BOT_TOKEN = process.env.TELEGRAM_TOKEN || "7970793585:AAFQdnj7LsNP5gvKnm-_Dy2d4Rizxg8txmg";
+const BOT_TOKEN = process.env.TELEGRAM_TOKEN || "8455434413:AAESzlehbJ68yUQeEk-5LfWWCXtajiaI69Y";
 const NETWORK = "mainnet-beta";
 const RPC_URL = clusterApiUrl(NETWORK);
 const LOG_FILE = "output.txt";
