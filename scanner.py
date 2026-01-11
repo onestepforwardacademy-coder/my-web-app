@@ -168,21 +168,24 @@ def run_selenium_screenshot(
 
     chrome_options = Options()
     
-    # DYNAMIC BINARY DETECTION (Fixes the crash)
+    # DYNAMIC BINARY DETECTION
     vps_path = "/usr/bin/google-chrome"
     if os.path.exists(vps_path):
         chrome_options.binary_location = vps_path
     
+    # MANDATORY SERVER FLAGS
     if headless:
         chrome_options.add_argument("--headless=new")
     
-    chrome_options.add_argument("--no-sandbox")
-    chrome_options.add_argument("--disable-dev-shm-usage")
+    chrome_options.add_argument("--no-sandbox")            # Crucial for root user
+    chrome_options.add_argument("--disable-dev-shm-usage") # Prevents memory crashes
+    chrome_options.add_argument("--remote-debugging-pipe") # FIXES: DevToolsActivePort error
     chrome_options.add_argument("--disable-gpu") 
+    chrome_options.add_argument("--disable-extensions")
     chrome_options.add_argument("--window-size=1920,10800")
     chrome_options.add_argument("user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36")
 
-    # DYNAMIC DRIVER DETECTION (No more hardcoded paths)
+    # DYNAMIC DRIVER DETECTION
     service = Service(ChromeDriverManager().install())
     driver = webdriver.Chrome(service=service, options=chrome_options)
 
@@ -243,3 +246,8 @@ def run_scan_and_search() -> List[str]:
         search_solana_by_mint(token)
 
     return pair_symbols
+
+# Add a simple test block for running manually
+if __name__ == "__main__":
+    print("🛰️ Starting Scanner Test...")
+    run_scan_and_search()
