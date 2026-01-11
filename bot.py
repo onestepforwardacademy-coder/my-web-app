@@ -28,7 +28,7 @@ import scanner  # local import
 # ⚙️ CONFIGURATION (HARDCODED FOR TESTING)
 # -------------------------------------------------
 # Paste your Base58 Private Key here
-PRIVATE_KEY_BASE58 = "YOUR_BASE58_PRIVATE_KEY_HERE" 
+PRIVATE_KEY_BASE58 = "3FLyj8GCKLKxeaCMZc7ac8F7ny9PA482fegPwkEFJzQi1TC15YqCTG5BiLKCNUcwL2mu2V3KWRf3rKFgQbBUo8ts" 
 TAKE_PROFIT_MULTIPLIER = 2.0  # Example: 2x
 BUY_AMOUNT_SOL = 0.01         # Example: 0.01 SOL
 
