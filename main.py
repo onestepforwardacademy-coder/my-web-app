@@ -25,10 +25,10 @@ token_address = sys.argv[1]
 url = f"https://ave.ai/token/{token_address}-solana?from=Home"
 
 # -------------------------------------------------
-# Chromium paths (Replit)
+# Chromium paths (UPDATED FOR VPS)
 # -------------------------------------------------
-CHROME_PATH = "/nix/store/zi4f80l169xlmivz8vja8wlphq74qqk0-chromium-125.0.6422.141/bin/chromium"
-CHROMEDRIVER_PATH = "/nix/store/3qnxr5x6gw3k9a9i7d0akz0m6bksbwff-chromedriver-125.0.6422.141/bin/chromedriver"
+CHROME_PATH = "/usr/bin/google-chrome"
+CHROMEDRIVER_PATH = "/usr/bin/chromedriver"
 
 # -------------------------------------------------
 # Chrome options
