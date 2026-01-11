@@ -168,10 +168,8 @@ def run_selenium_screenshot(
 
     chrome_options = Options()
     
-    # DYNAMIC BINARY DETECTION
-    vps_path = "/usr/bin/google-chrome"
-    if os.path.exists(vps_path):
-        chrome_options.binary_location = vps_path
+    # DYNAMIC BINARY DETECTION - MATCHING SNAP CHROMIUM PATH
+    chrome_options.binary_location = "/snap/bin/chromium"
     
     if headless:
         chrome_options.add_argument("--headless=new")
@@ -186,8 +184,9 @@ def run_selenium_screenshot(
     chrome_options.add_argument("user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36")
 
     # DYNAMIC DRIVER DETECTION
-    service = Service(ChromeDriverManager().install())
-    driver = webdriver.Chrome(service=service, options=chrome_options)
+    # We remove ChromeDriverManager().install() to let Selenium Manager
+    # handle the driver version automatically based on binary_location.
+    driver = webdriver.Chrome(options=chrome_options)
 
     try:
         url = "https://dexscreener.com/?rankBy=pairAge&order=asc&chainIds=solana&dexIds=pumpswap,pumpfun&maxAge=2&profile=1"
