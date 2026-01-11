@@ -367,42 +367,59 @@ def run_emergency_system():
 
     while True:
         # 1. Monitoring & Emergency Exit logic
-        for token in list(tracked_tokens.keys()):
-            data = fetch_jupiter_token_info(token)
-            if data:
-                if emergency_exit_check(data, token):
-                    if token in tracked_tokens: del tracked_tokens[token]
-                    continue
-
-                current_price = data.get('usdPrice', 0)
-                # Safeguard check for target price
-                target = tracked_tokens[token].get("target_price", 0)
-                is_tp_hit = current_price >= target if target > 0 else False
-
-                if is_tp_hit:
-                    if sell_swap(token, reason="🎯 TARGET HIT"):
+        if tracked_tokens:
+            print(f"📊 Monitoring {len(tracked_tokens)} held tokens...")
+            for token in list(tracked_tokens.keys()):
+                data = fetch_jupiter_token_info(token)
+                if data:
+                    if emergency_exit_check(data, token):
                         if token in tracked_tokens: del tracked_tokens[token]
-            else:
-                price = get_token_price(token)
-                target = tracked_tokens[token].get("target_price", 0)
-                if price and target > 0 and price >= target:
-                    if sell_swap(token, reason="🎯 TARGET HIT (DexFallback)"):
-                        if token in tracked_tokens: del tracked_tokens[token]
+                        continue
+
+                    current_price = data.get('usdPrice', 0)
+                    # Safeguard check for target price
+                    target = tracked_tokens[token].get("target_price", 0)
+                    is_tp_hit = current_price >= target if target > 0 else False
+
+                    if is_tp_hit:
+                        if sell_swap(token, reason="🎯 TARGET HIT"):
+                            if token in tracked_tokens: del tracked_tokens[token]
+                else:
+                    price = get_token_price(token)
+                    target = tracked_tokens[token].get("target_price", 0)
+                    if price and target > 0 and price >= target:
+                        if sell_swap(token, reason="🎯 TARGET HIT (DexFallback)"):
+                            if token in tracked_tokens: del tracked_tokens[token]
+        else:
+            print("📊 Wallet currently empty. Waiting for scan results...")
 
         # 2. Scanning logic (Communication with scanner.py)
         try:
+            print("\n🔍 STARTING NEW SCAN CYCLE...")
             # Calling the actual function to fetch new tokens
             scanner.run_scan_and_search()
+            
+            # --- NEW: VISIBILITY LOGGING ---
+            if scanner.new_pairs_to_buy:
+                print(f"📡 SCAN SUCCESS: Found {len(scanner.new_pairs_to_buy)} total tokens to analyze.")
+                for idx, t_mint in enumerate(scanner.new_pairs_to_buy, 1):
+                    print(f"   [{idx}] Detected: {t_mint}")
+            else:
+                print("📡 SCAN COMPLETED: No new eligible tokens detected in this cycle.")
+            # -------------------------------
+
         except Exception as e:
             print(f"⚠️ Scanner cycle error: {e}")
 
         # 3. Buying logic (Process new tokens found by scanner)
         if scanner.new_pairs_to_buy:
+            print(f"⚙️ Running safety/rug checks on {len(scanner.new_pairs_to_buy)} tokens...")
             # Create a copy of the list to iterate to avoid modification errors
             for token in list(scanner.new_pairs_to_buy):
                 buy_if_safe(token)
                 time.sleep(2)
 
+        print(f"💤 Cycle complete. Sleeping for {MONITOR_INTERVAL}s...\n")
         time.sleep(MONITOR_INTERVAL)
 
 # -------------------------------------------------
