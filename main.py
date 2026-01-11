@@ -1,18 +1,16 @@
 # main.py
-# Selenium Rug Pull checker for ave.ai
-# Output format is STRICTLY designed for bot.py parsing
-
 import sys
 import time
 import re
+import os
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
+from webdriver_manager.chrome import ChromeDriverManager
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import TimeoutException, NoSuchElementException
 
 # -------------------------------------------------
 # Validate argument
@@ -25,33 +23,24 @@ token_address = sys.argv[1]
 url = f"https://ave.ai/token/{token_address}-solana?from=Home"
 
 # -------------------------------------------------
-# Chromium paths (DIRECT ABSOLUTE PATH FOR VPS)
-# -------------------------------------------------
-# Bypassing /usr/bin links to avoid "Too many levels of symbolic links"
-CHROME_PATH = "/opt/google/chrome/google-chrome"
-CHROMEDRIVER_PATH = "/usr/bin/chromedriver"
-
-# -------------------------------------------------
-# Chrome options
+# Chrome options (CRITICAL FOR VPS)
 # -------------------------------------------------
 options = Options()
-options.binary_location = CHROME_PATH
 options.add_argument("--headless=new")
-options.add_argument("--no-sandbox")            # Required for Root VPS
-options.add_argument("--disable-dev-shm-usage")  # Required for Root VPS
+options.add_argument("--no-sandbox")            # Essential for root user
+options.add_argument("--disable-dev-shm-usage")  # Prevents crashes
 options.add_argument("--disable-gpu")
-options.add_argument("--disable-blink-features=AutomationControlled")
 options.add_argument("--window-size=1920,1080")
-# Add User-Agent to prevent bot detection
 options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
 
 # -------------------------------------------------
-# Start driver
+# Start driver using Auto-Discovery
 # -------------------------------------------------
-service = Service(CHROMEDRIVER_PATH)
-driver = webdriver.Chrome(service=service, options=options)
-
 try:
+    # This automatically downloads and matches the driver to your Chrome version
+    service = Service(ChromeDriverManager().install())
+    driver = webdriver.Chrome(service=service, options=options)
+
     print(f"\n🔎 Checking token: {token_address}")
     print(f"🌐 URL: {url}")
 
@@ -60,7 +49,7 @@ try:
     time.sleep(12)
 
     # -------------------------------------------------
-    # Dismiss modal if present
+    # Dismiss modal
     # -------------------------------------------------
     try:
         driver.find_element(By.TAG_NAME, "body").send_keys(Keys.ESCAPE)
@@ -73,7 +62,6 @@ try:
     # -------------------------------------------------
     print("\n📊 Extracting Rug Pull percentage...")
 
-    # Looking for 'Rug Pull' text followed by the percentage value
     RUG_XPATH = "//*[contains(text(),'Rug Pull')]/following::*[contains(text(),'%')][1]"
 
     percent_element = WebDriverWait(driver, 25).until(
@@ -92,7 +80,7 @@ try:
     rug_percent = float(match.group(1))
 
     # -------------------------------------------------
-    # FINAL OUTPUT (DO NOT CHANGE FORMAT)
+    # FINAL OUTPUT
     # -------------------------------------------------
     print(f"\nRug Pull Percentage: {rug_percent}%")
 
@@ -101,8 +89,6 @@ try:
     else:
         print("DECISION: SKIP")
 
-except TimeoutException:
-    print("ERROR: Timeout while extracting Rug Pull")
 except Exception as e:
     print(f"ERROR: {e}")
 finally:
