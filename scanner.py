@@ -1,17 +1,22 @@
 # scanner.py
-# Playwright (Stable Fix) + OCR + Dexscreener search utilities
+# Selenium + OCR + Dexscreener search utilities
 
 import time
 import re
 import requests
-import os
 from datetime import datetime, timezone
+from selenium import webdriver
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
 from PIL import Image as PILImage, ImageEnhance
 import pytesseract
+import os
 from typing import List, Tuple, Optional, Dict
 
-# Switch to Playwright for the "Forever Fix"
-from playwright.sync_api import sync_playwright
+# Keep your existing driver manager import for path fixes
+from webdriver_manager.chrome import ChromeDriverManager
 
 SEEN_PAIRS_FILE = "seen_pairs.txt"
 
@@ -154,48 +159,53 @@ def search_solana_by_mint(token_mint: str) -> None:
                 print(f"     🔗 Socials: {profile['socials']}")
         print("")
 
-# ----- THE FOREVER FIX: Playwright Engine -----
+# ----- Selenium + OCR screenshot and parse -----
 def run_selenium_screenshot(
     screenshot_path: str = "/tmp/dexscreener_full_screenshot.png",
     headless: bool = True
 ) -> str:
-    with sync_playwright() as p:
-        browser = p.chromium.launch(
-            headless=headless,
-            args=["--no-sandbox", "--disable-dev-shm-usage"]
-        )
-        
-        context = browser.new_context(
-            viewport={'width': 1920, 'height': 1080},
-            user_agent="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
-        )
-        page = context.new_page()
+    from selenium.webdriver.chrome.options import Options
 
-        # SPEED OPTIMIZATION: Block heavy assets that are not needed for OCR
-        page.route("**/*.{png,jpg,jpeg,svg,gif,webp,css,woff,pdf}", lambda route: route.abort())
+    chrome_options = Options()
+    
+    # DYNAMIC BINARY DETECTION (Fixes the crash)
+    vps_path = "/usr/bin/google-chrome"
+    if os.path.exists(vps_path):
+        chrome_options.binary_location = vps_path
+    
+    if headless:
+        chrome_options.add_argument("--headless=new")
+    
+    chrome_options.add_argument("--no-sandbox")
+    chrome_options.add_argument("--disable-dev-shm-usage")
+    chrome_options.add_argument("--disable-gpu") 
+    chrome_options.add_argument("--window-size=1920,10800")
+    chrome_options.add_argument("user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36")
 
-        try:
-            url = "https://dexscreener.com/?rankBy=pairAge&order=asc&chainIds=solana&dexIds=pumpswap,pumpfun&maxAge=2&profile=1"
-            
-            # Using 'domcontentloaded' is much faster than 'networkidle'
-            page.goto(url, wait_until="domcontentloaded", timeout=60000)
-            
-            # SMART WAIT: Wait for the actual token table instead of a 7s timer
-            page.wait_for_selector(".ds-dex-table-row", timeout=15000)
+    # DYNAMIC DRIVER DETECTION (No more hardcoded paths)
+    service = Service(ChromeDriverManager().install())
+    driver = webdriver.Chrome(service=service, options=chrome_options)
 
-            # Full height scroll logic - kept but reduced timeout for speed
-            for _ in range(3):
-                page.mouse.wheel(0, 4000)
-                page.wait_for_timeout(500) # Reduced from 1500 to 500
+    try:
+        url = "https://dexscreener.com/?rankBy=pairAge&order=asc&chainIds=solana&dexIds=pumpswap,pumpfun&maxAge=2&profile=1"
+        driver.get(url)
+        WebDriverWait(driver, 20).until(EC.presence_of_element_located((By.TAG_NAME, "body")))
+        time.sleep(6)
 
-            # Take high-def screenshot
-            page.screenshot(path=screenshot_path, full_page=True)
-            print(f"✅ Success: Screenshot saved to {screenshot_path}")
+        # Infinite scroll handling
+        last_height = driver.execute_script("return document.body.scrollHeight")
+        for _ in range(3): 
+            driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+            time.sleep(2)
+            new_height = driver.execute_script("return document.body.scrollHeight")
+            if new_height == last_height:
+                break
+            last_height = new_height
 
-        except Exception as e:
-            print(f"❌ Screenshot Error: {e}")
-        finally:
-            browser.close()
+        driver.save_screenshot(screenshot_path)
+        print(f"Screenshot saved to {screenshot_path}")
+    finally:
+        driver.quit()
 
     return screenshot_path
 
@@ -206,8 +216,7 @@ def ocr_extract_pair_symbols(screenshot_path: str) -> List[str]:
     enhancer = ImageEnhance.Contrast(img)
     img = enhancer.enhance(2.0)
 
-    # Added config for sparse text detection (much faster for tables)
-    text = pytesseract.image_to_string(img, config='--psm 11')
+    text = pytesseract.image_to_string(img)
     lines = text.splitlines()
 
     pair_symbols: List[str] = []
@@ -230,8 +239,7 @@ def run_scan_and_search() -> List[str]:
     pair_symbols = ocr_extract_pair_symbols(shot)
     print(f"✅ Found {len(pair_symbols)} total pair symbols. Searching profiles...\n")
 
-    # Use a set to avoid searching the same token twice if OCR finds it multiple times
-    for token in set(pair_symbols):
+    for token in pair_symbols:
         search_solana_by_mint(token)
 
     return pair_symbols
