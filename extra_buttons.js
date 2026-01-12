@@ -81,9 +81,6 @@ export function attachExtraButtons(bot, userState, userTrades = {}) {
 export function getExtraButtons() {
   const PAD = "    ";
   return [
-    [{ text: `🔄${PAD}SELL BACK (ALL ACCOUNTS)${PAD}`, callback_data: "sell_back_v2" }],
-    [{ text: `🆕${PAD}VERIFY NEW FEATURE${PAD}`, callback_data: "verify_new_feature" }],
-    [{ text: `🔍${PAD}ANALYSE SOLANA TOKEN${PAD}`, callback_data: "analyse_solana_token" }],
     [{ text: `💸${PAD}TRANSFER SOL${PAD}`, callback_data: "transfer_sol" }]
   ];
 }
