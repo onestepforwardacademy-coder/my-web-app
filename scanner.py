@@ -159,35 +159,34 @@ def run_selenium_screenshot(
     screenshot_path: str = "/tmp/dexscreener_full_screenshot.png",
     headless: bool = True
 ) -> str:
-    """
-    Kept the name 'run_selenium_screenshot' so your index.js doesn't break,
-    but the engine is now Playwright for maximum stability.
-    """
     with sync_playwright() as p:
-        # Launch Chromium with VPS-optimized flags
         browser = p.chromium.launch(
             headless=headless,
             args=["--no-sandbox", "--disable-dev-shm-usage"]
         )
         
-        # High resolution context
         context = browser.new_context(
             viewport={'width': 1920, 'height': 1080},
             user_agent="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
         )
         page = context.new_page()
 
+        # SPEED OPTIMIZATION: Block heavy assets that are not needed for OCR
+        page.route("**/*.{png,jpg,jpeg,svg,gif,webp,css,woff,pdf}", lambda route: route.abort())
+
         try:
             url = "https://dexscreener.com/?rankBy=pairAge&order=asc&chainIds=solana&dexIds=pumpswap,pumpfun&maxAge=2&profile=1"
             
-            # Playwright handles timeouts and waiting much better than Selenium
-            page.goto(url, wait_until="networkidle", timeout=60000)
-            page.wait_for_timeout(7000) # Wait for table data to populate
+            # Using 'domcontentloaded' is much faster than 'networkidle'
+            page.goto(url, wait_until="domcontentloaded", timeout=60000)
+            
+            # SMART WAIT: Wait for the actual token table instead of a 7s timer
+            page.wait_for_selector(".ds-dex-table-row", timeout=15000)
 
-            # Full height scroll logic
+            # Full height scroll logic - kept but reduced timeout for speed
             for _ in range(3):
                 page.mouse.wheel(0, 4000)
-                page.wait_for_timeout(1500)
+                page.wait_for_timeout(500) # Reduced from 1500 to 500
 
             # Take high-def screenshot
             page.screenshot(path=screenshot_path, full_page=True)
@@ -207,7 +206,8 @@ def ocr_extract_pair_symbols(screenshot_path: str) -> List[str]:
     enhancer = ImageEnhance.Contrast(img)
     img = enhancer.enhance(2.0)
 
-    text = pytesseract.image_to_string(img)
+    # Added config for sparse text detection (much faster for tables)
+    text = pytesseract.image_to_string(img, config='--psm 11')
     lines = text.splitlines()
 
     pair_symbols: List[str] = []
@@ -230,7 +230,8 @@ def run_scan_and_search() -> List[str]:
     pair_symbols = ocr_extract_pair_symbols(shot)
     print(f"✅ Found {len(pair_symbols)} total pair symbols. Searching profiles...\n")
 
-    for token in pair_symbols:
+    # Use a set to avoid searching the same token twice if OCR finds it multiple times
+    for token in set(pair_symbols):
         search_solana_by_mint(token)
 
     return pair_symbols
