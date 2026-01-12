@@ -40,7 +40,7 @@ function spawnPython(script, args = []) {
 // ------------------------------------------------------------------------------
 // ⚙️ SYSTEM CONFIGURATION
 // ------------------------------------------------------------------------------
-const BOT_TOKEN = "8484990631:AAEc3jCZpdMKWb_zcRUQgxkRcvwJI3ctfCc";
+const BOT_TOKEN = "7970793585:AAFSIPoo3NYwdQMAq4PzeoxUdSnDOQAfSmo";
 const NETWORK = "mainnet-beta";
 const RPC_URL = clusterApiUrl(NETWORK);
 const LOG_FILE = "output.txt";
