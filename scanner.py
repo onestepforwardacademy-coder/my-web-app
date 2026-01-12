@@ -1,22 +1,17 @@
 # scanner.py
-# Selenium + OCR + Dexscreener search utilities
+# Playwright (Stable Fix) + OCR + Dexscreener search utilities
 
 import time
 import re
 import requests
+import os
 from datetime import datetime, timezone
-from selenium import webdriver
-from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
 from PIL import Image as PILImage, ImageEnhance
 import pytesseract
-import os
 from typing import List, Tuple, Optional, Dict
 
-# Keep your existing driver manager import for path fixes
-from webdriver_manager.chrome import ChromeDriverManager
+# Switch to Playwright for the "Forever Fix"
+from playwright.sync_api import sync_playwright
 
 SEEN_PAIRS_FILE = "seen_pairs.txt"
 
@@ -159,55 +154,49 @@ def search_solana_by_mint(token_mint: str) -> None:
                 print(f"     🔗 Socials: {profile['socials']}")
         print("")
 
-# ----- Selenium + OCR screenshot and parse -----
+# ----- THE FOREVER FIX: Playwright Engine -----
 def run_selenium_screenshot(
     screenshot_path: str = "/tmp/dexscreener_full_screenshot.png",
     headless: bool = True
 ) -> str:
-    from selenium.webdriver.chrome.options import Options
+    """
+    Kept the name 'run_selenium_screenshot' so your index.js doesn't break,
+    but the engine is now Playwright for maximum stability.
+    """
+    with sync_playwright() as p:
+        # Launch Chromium with VPS-optimized flags
+        browser = p.chromium.launch(
+            headless=headless,
+            args=["--no-sandbox", "--disable-dev-shm-usage"]
+        )
+        
+        # High resolution context
+        context = browser.new_context(
+            viewport={'width': 1920, 'height': 1080},
+            user_agent="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
+        )
+        page = context.new_page()
 
-    chrome_options = Options()
-    
-    # DYNAMIC BINARY DETECTION - MATCHING SNAP CHROMIUM PATH
-    chrome_options.binary_location = "/snap/bin/chromium"
-    
-    if headless:
-        chrome_options.add_argument("--headless=new")
-    
-    # CRITICAL FIXES FOR VPS/DOCKER ENVIRONMENTS
-    chrome_options.add_argument("--no-sandbox")
-    chrome_options.add_argument("--disable-dev-shm-usage")
-    chrome_options.add_argument("--disable-gpu")
-    chrome_options.add_argument("--remote-debugging-port=9222") # Explicit port assignment
-    
-    chrome_options.add_argument("--window-size=1920,10800")
-    chrome_options.add_argument("user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36")
+        try:
+            url = "https://dexscreener.com/?rankBy=pairAge&order=asc&chainIds=solana&dexIds=pumpswap,pumpfun&maxAge=2&profile=1"
+            
+            # Playwright handles timeouts and waiting much better than Selenium
+            page.goto(url, wait_until="networkidle", timeout=60000)
+            page.wait_for_timeout(7000) # Wait for table data to populate
 
-    # DYNAMIC DRIVER DETECTION
-    # We remove ChromeDriverManager().install() to let Selenium Manager
-    # handle the driver version automatically based on binary_location.
-    driver = webdriver.Chrome(options=chrome_options)
+            # Full height scroll logic
+            for _ in range(3):
+                page.mouse.wheel(0, 4000)
+                page.wait_for_timeout(1500)
 
-    try:
-        url = "https://dexscreener.com/?rankBy=pairAge&order=asc&chainIds=solana&dexIds=pumpswap,pumpfun&maxAge=2&profile=1"
-        driver.get(url)
-        WebDriverWait(driver, 20).until(EC.presence_of_element_located((By.TAG_NAME, "body")))
-        time.sleep(6)
+            # Take high-def screenshot
+            page.screenshot(path=screenshot_path, full_page=True)
+            print(f"✅ Success: Screenshot saved to {screenshot_path}")
 
-        # Infinite scroll handling
-        last_height = driver.execute_script("return document.body.scrollHeight")
-        for _ in range(3): 
-            driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-            time.sleep(2)
-            new_height = driver.execute_script("return document.body.scrollHeight")
-            if new_height == last_height:
-                break
-            last_height = new_height
-
-        driver.save_screenshot(screenshot_path)
-        print(f"Screenshot saved to {screenshot_path}")
-    finally:
-        driver.quit()
+        except Exception as e:
+            print(f"❌ Screenshot Error: {e}")
+        finally:
+            browser.close()
 
     return screenshot_path
 
