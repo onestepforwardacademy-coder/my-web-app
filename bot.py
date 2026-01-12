@@ -28,6 +28,10 @@ from spl.token.constants import TOKEN_PROGRAM_ID
 # ----------------------------------
 import scanner  # local import
 
+# --- VIRTUAL ENVIRONMENT PATHING [ADDED 2026] ---
+VENV_PYTHON = "/root/my-web-app/venv/bin/python3"
+# ------------------------------------------------
+
 # -------------------------------------------------
 # Command-line arguments
 # -------------------------------------------------
@@ -295,12 +299,14 @@ def sell_swap(token_mint: str, reason="TARGET") -> bool:
 def get_rug_pull_from_main(token_address: str) -> float | None:
     try:
         print(f"📝 Running main.py for token: {token_address}")
+        # --- UPDATED 2026: USING VIRTUAL ENV PYTHON ---
         result = subprocess.run(
-            ["python3", "main.py", token_address],
+            [VENV_PYTHON, "main.py", token_address],
             capture_output=True,
             text=True,
             timeout=90
         )
+        # -----------------------------------------------
 
         print("\n📄 main.py RAW OUTPUT ↓↓↓\n")
         print(result.stdout)
@@ -337,10 +343,18 @@ def buy_if_safe(token_mint: str):
 
     if rug is None:
         print("❌ Rug unreadable — SKIP")
+        # --- ADDED 2026: CLEAN QUEUE IF UNREADABLE ---
+        if token_mint in scanner.new_pairs_to_buy:
+            scanner.new_pairs_to_buy.remove(token_mint)
+        # ---------------------------------------------
         return
 
     if rug > 55:
         print(f"🔴 Rug {rug}% — SKIP BUY")
+        # --- ADDED 2026: CLEAN QUEUE IF DANGEROUS ---
+        if token_mint in scanner.new_pairs_to_buy:
+            scanner.new_pairs_to_buy.remove(token_mint)
+        # ---------------------------------------------
         return
 
     print(f"🟢 Rug {rug}% — BUYING")
@@ -419,6 +433,9 @@ def emergency_exit_check(data, token_mint):
 def run_emergency_system():
     """Updated 2026 main loop that replaces the standard main()."""
     print("\n🚀 BOT STARTED WITH EMERGENCY EXIT (-70%) ACTIVE")
+    # --- ADDED 2026 DEBUG PRINT ---
+    print(f"Using Environment: {VENV_PYTHON}")
+    # ------------------------------
 
     while True:
         # 1. Monitoring & Emergency Exit logic
