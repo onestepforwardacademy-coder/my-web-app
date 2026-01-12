@@ -1,4 +1,4 @@
-my scanner.py is this it seem to run sowly and wait much time how to set in this scanner to make sure it run fast? # scanner.py
+# scanner.py
 # Playwright (Stable Fix) + OCR + Dexscreener search utilities
 
 import time
