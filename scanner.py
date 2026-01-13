@@ -229,6 +229,9 @@ def run_scan_and_search() -> List[str]:
     shot = run_selenium_screenshot()
     pair_symbols = ocr_extract_pair_symbols(shot)
     print(f"✅ Found {len(pair_symbols)} total pair symbols. Searching profiles...\n")
+    
+    if __name__ == "__main__":
+    run_scan_and_search()
 
     for token in pair_symbols:
         search_solana_by_mint(token)
