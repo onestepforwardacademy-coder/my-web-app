@@ -7,12 +7,18 @@ import requests
 import os
 import sqlite3 # Updated: Added for database support
 from datetime import datetime, timezone
-from PIL import Image as PILImage, ImageEnhance
+from PIL import Image as PILImage, ImageEnhance, ImageOps
 import pytesseract
 from typing import List, Tuple, Optional, Dict
 
 # Switch to Playwright for the "Forever Fix"
 from playwright.sync_api import sync_playwright
+# NEW: Import stealth to bypass bot protection
+try:
+    from playwright_stealth import stealth_sync
+except ImportError:
+    # If not installed, we skip it but recommend installing it
+    stealth_sync = None
 
 # Updated: Database path on your VPS
 DB_PATH = "/root/my-web-app/scanner_data.db"
@@ -119,7 +125,8 @@ def search_solana_by_mint(token_mint: str) -> None:
 
     pairs = data.get("pairs", [])
     sol_pairs = [p for p in pairs if p.get("chainId") == "solana"]
-    pump_pairs = [p for p in sol_pairs if p.get("dexId") == "pumpswap"]
+    # Adjusting dexId check as pump.fun pairs often use 'pumpswap' or 'pumpfun'
+    pump_pairs = [p for p in sol_pairs if p.get("dexId") in ["pumpswap", "pumpfun"]]
 
     final_pairs: List[Tuple[dict, dict]] = []
     for p in pump_pairs:
@@ -128,6 +135,7 @@ def search_solana_by_mint(token_mint: str) -> None:
             continue
         age_minutes = (datetime.now(timezone.utc) -
                        datetime.fromtimestamp(pair_created_at / 1000, tz=timezone.utc)).total_seconds() / 60
+        # Filter for tokens created in the last 120 minutes
         if age_minutes > 120:
             continue
 
@@ -180,7 +188,7 @@ def run_selenium_screenshot(
     headless: bool = True
 ) -> str:
     """
-    Enhanced with 'Wait for Selector' and Stealth to prevent blank results.
+    Enhanced with 'networkidle' and Stealth to prevent blank results.
     """
     with sync_playwright() as p:
         browser = p.chromium.launch(
@@ -194,25 +202,30 @@ def run_selenium_screenshot(
         )
         page = context.new_page()
 
+        # Apply stealth if installed
+        if stealth_sync:
+            stealth_sync(page)
+
         try:
             url = "https://dexscreener.com/?rankBy=pairAge&order=asc&chainIds=solana&dexIds=pumpswap,pumpfun&maxAge=2&profile=1"
             
-            # 1. Navigate
-            page.goto(url, wait_until="domcontentloaded", timeout=60000)
+            # 1. Navigate - Using networkidle to ensure full load
+            print(f"🚀 Navigating to Dexscreener...")
+            page.goto(url, wait_until="networkidle", timeout=90000)
             
-            # 2. WAIT FOR SELECTOR: Ensures table actually loaded before screenshot
-            print("⏳ Waiting for data table to appear...")
+            # 2. WAIT FOR SELECTOR: Ensures table actually loaded
+            print("⏳ Waiting for data table rows to appear...")
             try:
-                page.wait_for_selector('a.ds-dex-table-row', timeout=25000)
+                page.wait_for_selector('a.ds-dex-table-row', timeout=30000)
                 print("✅ Table rows detected!")
             except:
                 print("⚠️ Timeout waiting for table rows. Taking screenshot anyway.")
 
-            page.wait_for_timeout(3000)
+            page.wait_for_timeout(5000) # Extra safety buffer
 
-            # Full height scroll
-            for _ in range(3):
-                page.mouse.wheel(0, 4000)
+            # Full height scroll to trigger lazy loading
+            for _ in range(2):
+                page.mouse.wheel(0, 2000)
                 page.wait_for_timeout(1000)
 
             # Take high-def screenshot
@@ -227,27 +240,47 @@ def run_selenium_screenshot(
     return screenshot_path
 
 def ocr_extract_pair_symbols(screenshot_path: str) -> List[str]:
-    img = PILImage.open(screenshot_path)
-    img = img.convert('L') 
-    img = img.resize((img.width*2, img.height*2))
-    enhancer = ImageEnhance.Contrast(img)
-    img = enhancer.enhance(2.0)
+    """
+    Improved OCR with grayscale, resizing, and contrast enhancement.
+    """
+    print("🔍 Analyzing screenshot for symbols...")
+    try:
+        img = PILImage.open(screenshot_path)
+        
+        # 1. Convert to Grayscale
+        img = img.convert('L') 
+        
+        # 2. Rescale Up (3x) to make small fonts clearer
+        img = img.resize((img.width * 3, img.height * 3), resample=PILImage.LANCZOS)
+        
+        # 3. Increase Contrast
+        enhancer = ImageEnhance.Contrast(img)
+        img = enhancer.enhance(2.5)
+        
+        # 4. Use PSM 11 for Sparse Text (Tables) and whitelist common symbol chars
+        custom_config = r'--psm 11 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789/'
+        text = pytesseract.image_to_string(img, config=custom_config)
+        
+        if not text.strip():
+            print("⚠️ Tesseract could not read any text. Check image quality.")
+            return []
 
-    # Added --psm 6 to treat the image as a single uniform block
-    text = pytesseract.image_to_string(img, config='--psm 6')
-    lines = text.splitlines()
+        lines = text.splitlines()
+        pair_symbols: List[str] = []
+        # Pattern looks for symbols followed by a slash (e.g., "SOL/")
+        pattern = re.compile(r'([A-Z0-9]{3,})\s*/')
 
-    pair_symbols: List[str] = []
-    pattern = re.compile(r'([A-Za-z0-9]+)\s*/')
+        for line in lines:
+            matches = pattern.findall(line.upper())
+            for match in matches:
+                pair_symbols.append(match)
 
-    for line in lines:
-        line = line.strip()
-        matches = pattern.findall(line)
-        for match in matches:
-            pair_symbols.append(match.upper())
-
-    pair_symbols = list(dict.fromkeys(pair_symbols))
-    return pair_symbols
+        # Remove duplicates
+        pair_symbols = list(dict.fromkeys(pair_symbols))
+        return pair_symbols
+    except Exception as e:
+        print(f"❌ OCR Process Error: {e}")
+        return []
 
 def run_scan_and_search() -> List[str]:
     init_db() # Ensure DB is created
@@ -255,6 +288,12 @@ def run_scan_and_search() -> List[str]:
     new_pairs_to_buy = []
 
     shot = run_selenium_screenshot()
+    
+    # Check if file exists before processing
+    if not os.path.exists(shot) or os.path.getsize(shot) == 0:
+        print("❌ Screenshot failed or is empty. Check Playwright logs.")
+        return []
+
     pair_symbols = ocr_extract_pair_symbols(shot)
     
     # Validation check
@@ -262,9 +301,11 @@ def run_scan_and_search() -> List[str]:
         print("⚠️ No symbols found in this scan. The site might be blocking or empty.")
         return []
 
-    print(f"✅ Found {len(pair_symbols)} total pair symbols. Searching profiles...\n")
+    print(f"✅ Found {len(pair_symbols)} total potential symbols. Searching profiles...\n")
     
     for token in pair_symbols:
+        # Search by symbol (though Search by Mint is safer if we had the mint)
+        # Note: OCR currently gets symbols (SOL, PEPE). Dex API search handles symbols.
         search_solana_by_mint(token)
 
     return new_pairs_to_buy
