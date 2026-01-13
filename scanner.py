@@ -160,17 +160,14 @@ def run_selenium_screenshot(
     headless: bool = True
 ) -> str:
     """
-    Kept the name 'run_selenium_screenshot' so your index.js doesn't break,
-    but the engine is now Playwright for maximum stability.
+    Enhanced with 'Wait for Selector' to prevent blank results.
     """
     with sync_playwright() as p:
-        # Launch Chromium with VPS-optimized flags
         browser = p.chromium.launch(
             headless=headless,
             args=["--no-sandbox", "--disable-dev-shm-usage"]
         )
         
-        # High resolution context
         context = browser.new_context(
             viewport={'width': 1920, 'height': 1080},
             user_agent="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
@@ -180,14 +177,22 @@ def run_selenium_screenshot(
         try:
             url = "https://dexscreener.com/?rankBy=pairAge&order=asc&chainIds=solana&dexIds=pumpswap,pumpfun&maxAge=2&profile=1"
             
-            # Playwright handles timeouts and waiting much better than Selenium
+            # 1. Navigate and wait for network to be quiet
             page.goto(url, wait_until="networkidle", timeout=60000)
-            page.wait_for_timeout(7000) # Wait for table data to populate
+            
+            # 2. WAIT FOR SELECTOR: Ensures table actually loaded before screenshot
+            print("⏳ Waiting for data table to appear...")
+            try:
+                page.wait_for_selector('div.ds-dex-table-row', timeout=15000)
+            except:
+                print("⚠️ Timeout waiting for table rows. Site might be slow.")
 
-            # Full height scroll logic
+            page.wait_for_timeout(3000) # Small extra buffer
+
+            # Full height scroll
             for _ in range(3):
                 page.mouse.wheel(0, 4000)
-                page.wait_for_timeout(1500)
+                page.wait_for_timeout(1000)
 
             # Take high-def screenshot
             page.screenshot(path=screenshot_path, full_page=True)
@@ -207,7 +212,8 @@ def ocr_extract_pair_symbols(screenshot_path: str) -> List[str]:
     enhancer = ImageEnhance.Contrast(img)
     img = enhancer.enhance(2.0)
 
-    text = pytesseract.image_to_string(img)
+    # UPDATED: Added --psm 6 to treat the image as a single uniform block (good for tables)
+    text = pytesseract.image_to_string(img, config='--psm 6')
     lines = text.splitlines()
 
     pair_symbols: List[str] = []
@@ -228,6 +234,12 @@ def run_scan_and_search() -> List[str]:
 
     shot = run_selenium_screenshot()
     pair_symbols = ocr_extract_pair_symbols(shot)
+    
+    # Validation check
+    if not pair_symbols:
+        print("⚠️ No symbols found in this scan. The site might be blocking or empty.")
+        return []
+
     print(f"✅ Found {len(pair_symbols)} total pair symbols. Searching profiles...\n")
     
     for token in pair_symbols:
@@ -235,6 +247,6 @@ def run_scan_and_search() -> List[str]:
 
     return new_pairs_to_buy
 
-# ----- CORRECT EXECUTION TRIGGER -----
+# ----- EXECUTION TRIGGER -----
 if __name__ == "__main__":
     run_scan_and_search()
