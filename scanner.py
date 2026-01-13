@@ -1,177 +1,236 @@
 # scanner.py
+# Playwright (Stable Fix) + OCR + Dexscreener search utilities
+
 import time
 import re
 import requests
 import os
-import sqlite3
-import sys
 from datetime import datetime, timezone
 from PIL import Image as PILImage, ImageEnhance
 import pytesseract
 from typing import List, Tuple, Optional, Dict
 
-# Playwright Engine
+# Switch to Playwright for the "Forever Fix"
 from playwright.sync_api import sync_playwright
 
-# Database configuration
-DB_PATH = "scanner_data.db"
+SEEN_PAIRS_FILE = "seen_pairs.txt"
 
-# ----- Database Helpers -----
-def init_db():
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS seen_pairs 
-        (pair_address TEXT PRIMARY KEY, timestamp DATETIME DEFAULT CURRENT_TIMESTAMP)
-    ''')
-    conn.commit()
-    conn.close()
-
+# ----- memory helpers -----
 def load_seen_pairs() -> set:
-    init_db()
-    try:
-        conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
-        cursor.execute("SELECT pair_address FROM seen_pairs")
-        rows = cursor.fetchall()
-        conn.close()
-        return set(row[0] for row in rows)
-    except Exception as e:
-        print(f"❌ DB Load Error: {e}")
-        return set()
+    try:
+        with open(SEEN_PAIRS_FILE, "r") as f:
+            return set(line.strip() for line in f.readlines())
+    except FileNotFoundError:
+        return set()
 
 def save_seen_pair(pair_address: str) -> None:
-    try:
-        conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
-        cursor.execute("INSERT OR IGNORE INTO seen_pairs (pair_address) VALUES (?)", (pair_address,))
-        conn.commit()
-        conn.close()
-    except Exception as e:
-        print(f"❌ DB Save Error: {e}")
+    with open(SEEN_PAIRS_FILE, "a") as f:
+        f.write(pair_address + "\n")
 
-# ----- Dexscreener API Fetch -----
+# ----- formatting -----
+def format_age_dynamic(created_timestamp_ms: int) -> str:
+    created_dt = datetime.fromtimestamp(created_timestamp_ms / 1000, tz=timezone.utc)
+    now = datetime.now(timezone.utc)
+    delta = now - created_dt
+    total_minutes = int(delta.total_seconds() // 60)
+    if total_minutes < 60:
+        return f"{total_minutes}m"
+    total_hours = total_minutes // 60
+    minutes = total_minutes % 60
+    if total_hours < 24:
+        return f"{total_hours}h {minutes}m"
+    total_days = total_hours // 24
+    hours = total_hours % 24
+    if total_days < 30:
+        return f"{total_days}d {hours}h"
+    total_months = total_days // 30
+    days = total_days % 30
+    if total_months < 12:
+        return f"{total_months}m {days}d"
+    years = total_months // 12
+    months = total_months % 12
+    return f"{years}y {months}m"
+
+# ----- Dexscreener profile fetch -----
 def get_profile_info(token_mint: str) -> Optional[Dict]:
-    url = f"https://api.dexscreener.com/latest/dex/search?q={token_mint}"
-    try:
-        response = requests.get(url, timeout=10)
-        data = response.json()
-        pairs = data.get("pairs")
-        if not pairs: return None
-        
-        pair = pairs[0]
-        info = pair.get("info", {})
-        return {
-            "token_name": pair.get("baseToken", {}).get("name", "Unknown"),
-            "token_symbol": pair.get("baseToken", {}).get("symbol", ""),
-            "pair_url": pair.get("url"),
-            "image": info.get("imageUrl"),
-            "socials": info.get("socials")
-        }
-    except:
-        return None
+    url = f"https://api.dexscreener.com/latest/dex/search?q={token_mint}"
+    try:
+        response = requests.get(url, timeout=10)
+        data = response.json()
+    except Exception:
+        return None
 
-# ----- Search Logic -----
+    pairs = data.get("pairs")
+    if not pairs:
+        return None
+
+    pair = pairs[0]
+    info = pair.get("info", {})
+
+    token_name = pair.get("baseToken", {}).get("name", "Unknown")
+    token_symbol = pair.get("baseToken", {}).get("symbol", "")
+    pair_url = pair.get("url")
+
+    return {
+        "token_name": token_name,
+        "token_symbol": token_symbol,
+        "pair_url": pair_url,
+        "image": info.get("imageUrl"),
+        "socials": info.get("socials")
+    }
+
+# ----- Collector / public list -----
 new_pairs_to_buy: List[str] = []
 
+def collect_new_pair(token_mint: str) -> None:
+    if token_mint not in new_pairs_to_buy:
+        new_pairs_to_buy.append(token_mint)
+
+# ----- Dexscreener search for Solana mint -----
 def search_solana_by_mint(token_mint: str) -> None:
-    print(f"📡 API Check: {token_mint}")
-    url = f"https://api.dexscreener.com/latest/dex/search?q={token_mint}"
-    try:
-        r = requests.get(url, timeout=10)
-        data = r.json()
-    except:
-        return
+    url = f"https://api.dexscreener.com/latest/dex/search?q={token_mint}"
+    try:
+        r = requests.get(url, timeout=10)
+        r.raise_for_status()
+        data = r.json()
+    except Exception as e:
+        print(f"❌ Failed to fetch Dexscreener data for {token_mint}: {e}")
+        return
 
-    pairs = data.get("pairs", [])
-    seen_pairs = load_seen_pairs()
+    pairs = data.get("pairs", [])
+    sol_pairs = [p for p in pairs if p.get("chainId") == "solana"]
+    pump_pairs = [p for p in sol_pairs if p.get("dexId") == "pumpswap"]
 
-    for p in pairs:
-        if p.get("chainId") == "solana" and p.get("dexId") == "pumpswap":
-            pair_addr = p.get("pairAddress")
-            mint_addr = p.get("baseToken", {}).get("address")
+    final_pairs: List[Tuple[dict, dict]] = []
+    for p in pump_pairs:
+        pair_created_at = p.get("pairCreatedAt")
+        if not pair_created_at:
+            continue
+        age_minutes = (datetime.now(timezone.utc) -
+                       datetime.fromtimestamp(pair_created_at / 1000, tz=timezone.utc)).total_seconds() / 60
+        if age_minutes > 120:
+            continue
 
-            if pair_addr in seen_pairs:
-                continue
+        pair_address = p.get("pairAddress")
+        token_mint_address = p.get("baseToken", {}).get("address")
+        profile = get_profile_info(token_mint_address)
+        if profile:
+            final_pairs.append((p, profile))
 
-            if not mint_addr.endswith("pump"):
-                continue
+    if not final_pairs:
+        return
 
-            print(f"🌟 Found New: {mint_addr}")
-            save_seen_pair(pair_addr)
-            if mint_addr not in new_pairs_to_buy:
-                new_pairs_to_buy.append(mint_addr)
+    seen_pairs = load_seen_pairs()
 
-# ----- Playwright Screenshot (The "No Output" Fix) -----
-def run_selenium_screenshot(screenshot_path: str = "scan.png") -> str:
-    print("🚀 Starting Playwright Browser...")
-    with sync_playwright() as p:
-        # Args added to bypass VPS detection
-        browser = p.chromium.launch(headless=True, args=[
-            "--no-sandbox", 
-            "--disable-setuid-sandbox",
-            "--disable-blink-features=AutomationControlled"
-        ])
-        
-        context = browser.new_context(
-            viewport={'width': 1280, 'height': 1000},
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-        )
-        page = context.new_page()
+    for i, (p, profile) in enumerate(final_pairs, 1):
+        pair_address = p.get("pairAddress")
+        token_mint = p.get("baseToken", {}).get("address")
+        dex = p.get("dexId")
+        url = p.get("url")
+        token_age = format_age_dynamic(p.get("pairCreatedAt"))
 
-        try:
-            target_url = "https://dexscreener.com/?rankBy=pairAge&order=asc&chainIds=solana&dexIds=pumpswap,pumpfun&maxAge=2&profile=1"
-            print(f"🌐 Loading: {target_url}")
-            
-            # Using 'domcontentloaded' instead of 'networkidle' to prevent hanging
-            page.goto(target_url, wait_until="domcontentloaded", timeout=60000)
-            
-            print("⏳ Waiting for Dexscreener table...")
-            page.wait_for_timeout(10000) # Give it 10s to load tokens
-            
-            page.screenshot(path=screenshot_path)
-            print(f"📸 Screenshot Captured: {screenshot_path}")
-            
-        except Exception as e:
-            print(f"❌ Playwright Failed: {e}")
-        finally:
-            browser.close()
-            
-    return screenshot_path
+        if not token_mint.endswith("pump"):
+            print(f"⚠️ SCAM TOKEN DETECTED: {token_mint} — do NOT buy!")
+            continue
 
-# ----- OCR Logic -----
+        if pair_address in seen_pairs:
+            print("♻️ APPEARED BEFORE")
+        else:
+            print("🆕 NEW")
+            save_seen_pair(pair_address)
+            collect_new_pair(token_mint)
+
+        print(f"{i}. Token Address (copyable): {token_mint}")
+        print(f"    DEX: {dex}")
+        print(f"    Token Age: {token_age}")
+        print(f"    URL: {url}")
+        if profile:
+            print(f"    ✅ Profile FOUND on Dexscreener!")
+            print(f"     🪙 Token: {profile['token_name']} ({profile['token_symbol']})")
+            print(f"     🌐 Pair URL: {profile['pair_url']}")
+            if profile['image']:
+                print(f"     📸 Image: {profile['image']}")
+            if profile['socials']:
+                print(f"     🔗 Socials: {profile['socials']}")
+        print("")
+
+# ----- THE FOREVER FIX: Playwright Engine -----
+def run_selenium_screenshot(
+    screenshot_path: str = "/tmp/dexscreener_full_screenshot.png",
+    headless: bool = True
+) -> str:
+    """
+    Kept the name 'run_selenium_screenshot' so your index.js doesn't break,
+    but the engine is now Playwright for maximum stability.
+    """
+    with sync_playwright() as p:
+        # Launch Chromium with VPS-optimized flags
+        browser = p.chromium.launch(
+            headless=headless,
+            args=["--no-sandbox", "--disable-dev-shm-usage"]
+        )
+        
+        # High resolution context
+        context = browser.new_context(
+            viewport={'width': 1920, 'height': 1080},
+            user_agent="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
+        )
+        page = context.new_page()
+
+        try:
+            url = "https://dexscreener.com/?rankBy=pairAge&order=asc&chainIds=solana&dexIds=pumpswap,pumpfun&maxAge=2&profile=1"
+            
+            # Playwright handles timeouts and waiting much better than Selenium
+            page.goto(url, wait_until="networkidle", timeout=60000)
+            page.wait_for_timeout(7000) # Wait for table data to populate
+
+            # Full height scroll logic
+            for _ in range(3):
+                page.mouse.wheel(0, 4000)
+                page.wait_for_timeout(1500)
+
+            # Take high-def screenshot
+            page.screenshot(path=screenshot_path, full_page=True)
+            print(f"✅ Success: Screenshot saved to {screenshot_path}")
+
+        except Exception as e:
+            print(f"❌ Screenshot Error: {e}")
+        finally:
+            browser.close()
+
+    return screenshot_path
+
 def ocr_extract_pair_symbols(screenshot_path: str) -> List[str]:
-    print("🔍 OCR Reading...")
-    if not os.path.exists(screenshot_path):
-        print("❌ Error: Screenshot file not found!")
-        return []
+    img = PILImage.open(screenshot_path)
+    img = img.convert('L') 
+    img = img.resize((img.width*2, img.height*2))
+    enhancer = ImageEnhance.Contrast(img)
+    img = enhancer.enhance(2.0)
 
-    img = PILImage.open(screenshot_path).convert('L')
-    img = ImageEnhance.Contrast(img).enhance(2.0)
-    
-    text = pytesseract.image_to_string(img)
-    print(f"📝 Raw OCR Data Length: {len(text)}")
-    
-    symbols = list(set(re.findall(r'([A-Z0-9]{3,10})\s*/', text)))
-    print(f"✅ Found Symbols: {symbols}")
-    return symbols
+    text = pytesseract.image_to_string(img)
+    lines = text.splitlines()
 
-# ----- Main Run -----
+    pair_symbols: List[str] = []
+    pattern = re.compile(r'([A-Za-z0-9]+)\s*/')
+
+    for line in lines:
+        line = line.strip()
+        matches = pattern.findall(line)
+        for match in matches:
+            pair_symbols.append(match.upper())
+
+    pair_symbols = list(dict.fromkeys(pair_symbols))
+    return pair_symbols
+
 def run_scan_and_search() -> List[str]:
-    global new_pairs_to_buy
-    new_pairs_to_buy = []
-    
-    print(f"\n--- SCAN START [{datetime.now().strftime('%H:%M:%S')}] ---")
-    
-    path = run_selenium_screenshot()
-    symbols = ocr_extract_pair_symbols(path)
-    
-    for s in symbols:
-        search_solana_by_mint(s)
-        
-    print(f"--- SCAN FINISHED ---\n")
-    return new_pairs_to_buy
+    global new_pairs_to_buy
+    new_pairs_to_buy = []
 
-# This part ensures it runs when you type 'python3 scanner.py'
-if __name__ == "__main__":
-    run_scan_and_search()
+    shot = run_selenium_screenshot()
+    pair_symbols = ocr_extract_pair_symbols(shot)
+    print(f"✅ Found {len(pair_symbols)} total pair symbols. Searching profiles...\n")
+
+    for token in pair_symbols:
+        search_solana_by_mint(token)
+
+    return pair_symbols
