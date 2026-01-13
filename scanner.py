@@ -156,22 +156,33 @@ def run_selenium_screenshot(
         try:
             url = "https://dexscreener.com/?rankBy=pairAge&order=asc&chainIds=solana&dexIds=pumpswap,pumpfun&maxAge=2&profile=1"
             
-            # FIX 1: Changed 'networkidle' to 'domcontentloaded' to avoid forever-hanging
             print(f"🚀 Navigating to Dexscreener...")
-            page.goto(url, wait_until="domcontentloaded", timeout=60000)
+            # Increased timeout for slower VPS connections
+            page.goto(url, wait_until="domcontentloaded", timeout=90000)
             
-            # FIX 2: Wait for table with a strict timeout
-            print("⏳ Waiting for data table...")
+            # --- CLOUDFLARE CHALLENGE DETECTION ---
+            print("🛡️ Checking for Cloudflare/Bot walls...")
+            for i in range(6):  # Check for up to 30 seconds
+                content = page.content()
+                if "Just a moment" in content or "Verify you are human" in content:
+                    print(f"🔄 Challenge page detected (Attempt {i+1}/6)... waiting 5s...")
+                    page.wait_for_timeout(5000)
+                else:
+                    break
+            
+            # --- DATA TABLE VERIFICATION ---
+            print("⏳ Final check for data table...")
             try:
-                # Wait up to 20 seconds for the table rows
+                # Wait for the actual table rows to exist in the DOM
                 page.wait_for_selector('a.ds-dex-table-row', timeout=20000)
                 print("✅ Table rows detected!")
             except:
-                print("⚠️ Table didn't load in 20s. Likely blocked or challenge page.")
-                # FIX 3: Save a debug view to see what's happening
+                print("⚠️ Table didn't load in time. Likely blocked.")
                 page.screenshot(path="/tmp/debug_view.png")
-                print("📸 Check /tmp/debug_view.png to see what the bot sees.")
+                print("📸 Debug image saved to /tmp/debug_view.png")
 
+            # Scroll to trigger lazy-loaded elements
+            page.mouse.wheel(0, 1000)
             page.wait_for_timeout(3000) 
 
             # Take high-def screenshot
@@ -180,6 +191,7 @@ def run_selenium_screenshot(
 
         except Exception as e:
             print(f"❌ Screenshot Error: {e}")
+            page.screenshot(path="/tmp/error_crash.png")
         finally:
             browser.close()
 
@@ -189,11 +201,12 @@ def ocr_extract_pair_symbols(screenshot_path: str) -> List[str]:
     print("🔍 Analyzing screenshot for symbols...")
     try:
         img = PILImage.open(screenshot_path).convert('L')
+        # Triple resize for better small-text recognition
         img = img.resize((img.width * 3, img.height * 3), resample=PILImage.LANCZOS)
         enhancer = ImageEnhance.Contrast(img)
         img = enhancer.enhance(2.5)
         
-        # PSM 11 is good for sparse text like tables
+        # PSM 11 is optimized for sparse text/tables
         custom_config = r'--psm 11 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789/'
         text = pytesseract.image_to_string(img, config=custom_config)
         
@@ -215,10 +228,10 @@ def run_scan_and_search() -> List[str]:
 
     pair_symbols = ocr_extract_pair_symbols(shot)
     if not pair_symbols:
-        print("⚠️ No symbols found. The table might be empty.")
+        print("⚠️ No symbols found. The table might be empty or blocked.")
         return []
 
-    print(f"✅ Found {len(pair_symbols)} potential symbols. Searching...\n")
+    print(f"✅ Found {len(pair_symbols)} potential symbols. Searching profiles...\n")
     for token in pair_symbols:
         search_solana_by_mint(token)
 
