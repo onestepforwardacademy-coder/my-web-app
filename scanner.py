@@ -5,7 +5,7 @@ import time
 import re
 import requests
 import os
-import sqlite3  # New: Database support
+import sqlite3  # Database support
 from datetime import datetime, timezone
 from PIL import Image as PILImage, ImageEnhance
 import pytesseract
@@ -16,11 +16,10 @@ from playwright.sync_api import sync_playwright
 
 # Database configuration
 DB_PATH = "scanner_data.db"
-SEEN_PAIRS_FILE = "seen_pairs.txt"
 
-# ----- Database Helpers (New Integration) -----
+# ----- Database Helpers -----
 def init_db():
-    """Initializes the database and migrates data from the old text file if it exists."""
+    """Initializes the database. No more .txt migration logic."""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute('''
@@ -28,23 +27,6 @@ def init_db():
         (pair_address TEXT PRIMARY KEY, timestamp DATETIME DEFAULT CURRENT_TIMESTAMP)
     ''')
     conn.commit()
-    
-    # MIGRATION LOGIC: Move data from .txt to .db once, then stop using .txt
-    if os.path.exists(SEEN_PAIRS_FILE):
-        print(f"📦 Migrating legacy data from {SEEN_PAIRS_FILE} to database...")
-        try:
-            with open(SEEN_PAIRS_FILE, "r") as f:
-                old_pairs = [line.strip() for line in f.readlines() if line.strip()]
-            
-            for addr in old_pairs:
-                cursor.execute("INSERT OR IGNORE INTO seen_pairs (pair_address) VALUES (?)", (addr,))
-            conn.commit()
-            # Optional: Rename old file so migration doesn't run every time
-            os.rename(SEEN_PAIRS_FILE, f"{SEEN_PAIRS_FILE}.migrated")
-            print("✅ Migration complete. Old file renamed to .migrated")
-        except Exception as e:
-            print(f"⚠️ Migration warning: {e}")
-    
     conn.close()
 
 def load_seen_pairs() -> set:
