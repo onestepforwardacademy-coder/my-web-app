@@ -151,7 +151,7 @@ def search_solana_by_mint(token_mint: str) -> None:
         pair_created_at = p.get("pairCreatedAt")
         if not pair_created_at:
             continue
-        age_minutes = (datetime.now(timezone.utc) -
+        age_minutes = (datetime.now(timezone.utc) - 
                        datetime.fromtimestamp(pair_created_at / 1000, tz=timezone.utc)).total_seconds() / 60
         if age_minutes > 120:
             continue
