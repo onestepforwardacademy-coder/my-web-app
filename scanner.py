@@ -5,6 +5,7 @@ import time
 import re
 import requests
 import os
+import sqlite3 # Updated: Added for database support
 from datetime import datetime, timezone
 from PIL import Image as PILImage, ImageEnhance
 import pytesseract
@@ -13,19 +14,38 @@ from typing import List, Tuple, Optional, Dict
 # Switch to Playwright for the "Forever Fix"
 from playwright.sync_api import sync_playwright
 
-SEEN_PAIRS_FILE = "seen_pairs.txt"
+# Updated: Database path on your VPS
+DB_PATH = "/root/my-web-app/scanner_data.db"
 
-# ----- memory helpers -----
+# ----- memory helpers (Updated to use SQLite) -----
+def init_db():
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute('CREATE TABLE IF NOT EXISTS seen_pairs (pair_address TEXT PRIMARY KEY, found_at DATETIME DEFAULT CURRENT_TIMESTAMP)')
+    conn.close()
+
 def load_seen_pairs() -> set:
+    """Updated: Fetches seen pairs from Database instead of txt file"""
+    init_db()
     try:
-        with open(SEEN_PAIRS_FILE, "r") as f:
-            return set(line.strip() for line in f.readlines())
-    except FileNotFoundError:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("SELECT pair_address FROM seen_pairs")
+        rows = cursor.fetchall()
+        conn.close()
+        return set(row[0] for row in rows)
+    except Exception as e:
+        print(f"❌ DB Load Error: {e}")
         return set()
 
 def save_seen_pair(pair_address: str) -> None:
-    with open(SEEN_PAIRS_FILE, "a") as f:
-        f.write(pair_address + "\n")
+    """Updated: Saves seen pair to Database instead of txt file"""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.execute("INSERT OR IGNORE INTO seen_pairs (pair_address) VALUES (?)", (pair_address,))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"❌ DB Save Error: {e}")
 
 # ----- formatting -----
 def format_age_dynamic(created_timestamp_ms: int) -> str:
@@ -160,34 +180,35 @@ def run_selenium_screenshot(
     headless: bool = True
 ) -> str:
     """
-    Enhanced with 'Wait for Selector' to prevent blank results.
+    Enhanced with 'Wait for Selector' and Stealth to prevent blank results.
     """
     with sync_playwright() as p:
         browser = p.chromium.launch(
             headless=headless,
-            args=["--no-sandbox", "--disable-dev-shm-usage"]
+            args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-blink-features=AutomationControlled"]
         )
         
         context = browser.new_context(
             viewport={'width': 1920, 'height': 1080},
-            user_agent="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         )
         page = context.new_page()
 
         try:
             url = "https://dexscreener.com/?rankBy=pairAge&order=asc&chainIds=solana&dexIds=pumpswap,pumpfun&maxAge=2&profile=1"
             
-            # 1. Navigate and wait for network to be quiet
-            page.goto(url, wait_until="networkidle", timeout=60000)
+            # 1. Navigate
+            page.goto(url, wait_until="domcontentloaded", timeout=60000)
             
             # 2. WAIT FOR SELECTOR: Ensures table actually loaded before screenshot
             print("⏳ Waiting for data table to appear...")
             try:
-                page.wait_for_selector('div.ds-dex-table-row', timeout=15000)
+                page.wait_for_selector('a.ds-dex-table-row', timeout=25000)
+                print("✅ Table rows detected!")
             except:
-                print("⚠️ Timeout waiting for table rows. Site might be slow.")
+                print("⚠️ Timeout waiting for table rows. Taking screenshot anyway.")
 
-            page.wait_for_timeout(3000) # Small extra buffer
+            page.wait_for_timeout(3000)
 
             # Full height scroll
             for _ in range(3):
@@ -212,7 +233,7 @@ def ocr_extract_pair_symbols(screenshot_path: str) -> List[str]:
     enhancer = ImageEnhance.Contrast(img)
     img = enhancer.enhance(2.0)
 
-    # UPDATED: Added --psm 6 to treat the image as a single uniform block (good for tables)
+    # Added --psm 6 to treat the image as a single uniform block
     text = pytesseract.image_to_string(img, config='--psm 6')
     lines = text.splitlines()
 
@@ -229,6 +250,7 @@ def ocr_extract_pair_symbols(screenshot_path: str) -> List[str]:
     return pair_symbols
 
 def run_scan_and_search() -> List[str]:
+    init_db() # Ensure DB is created
     global new_pairs_to_buy
     new_pairs_to_buy = []
 
