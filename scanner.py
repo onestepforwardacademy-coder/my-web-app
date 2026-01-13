@@ -189,22 +189,33 @@ def run_selenium_screenshot(
     with sync_playwright() as p:
         browser = p.chromium.launch(
             headless=headless,
-            args=["--no-sandbox", "--disable-dev-shm-usage"]
+            args=[
+                "--no-sandbox", 
+                "--disable-dev-shm-usage",
+                "--disable-blink-features=AutomationControlled", # Hides automation status
+                "--disable-gpu"
+            ]
         )
         
         context = browser.new_context(
             viewport={'width': 1920, 'height': 1080},
-            user_agent="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
         )
         page = context.new_page()
 
         try:
             url = "https://dexscreener.com/?rankBy=pairAge&order=asc&chainIds=solana&dexIds=pumpswap,pumpfun&maxAge=2&profile=1"
-            page.goto(url, wait_until="networkidle", timeout=60000)
-            page.wait_for_timeout(7000)
+            print(f"🚀 Navigating to {url}...")
+            
+            # Using 'domcontentloaded' is more reliable than 'networkidle' for heavy sites
+            page.goto(url, wait_until="domcontentloaded", timeout=90000)
+            
+            print("⏳ Page structure loaded. Waiting 10s for table data...")
+            page.wait_for_timeout(10000)
 
-            for _ in range(3):
-                page.mouse.wheel(0, 4000)
+            # Extra scroll to trigger lazy-loaded rows
+            for _ in range(2):
+                page.mouse.wheel(0, 2000)
                 page.wait_for_timeout(1500)
 
             page.screenshot(path=screenshot_path, full_page=True)
@@ -212,6 +223,10 @@ def run_selenium_screenshot(
 
         except Exception as e:
             print(f"❌ Screenshot Error: {e}")
+            # Take a debug screenshot to see if it's a Cloudflare block
+            debug_path = "/tmp/error_debug.png"
+            page.screenshot(path=debug_path)
+            print(f"📸 Debug screenshot saved to {debug_path}")
         finally:
             browser.close()
 
@@ -228,7 +243,7 @@ def ocr_extract_pair_symbols(screenshot_path: str) -> List[str]:
     lines = text.splitlines()
 
     pair_symbols: List[str] = []
-    pattern = re.compile(r'([A-Za-z0-9]+)\s*/')
+    pattern = re.compile(r'([A-Za-z0-9]{3,10})\s*/')
 
     for line in lines:
         line = line.strip()
