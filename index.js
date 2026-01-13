@@ -19,29 +19,6 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 // Helper to spawn Python scripts with correct paths
-// Cleanup sold token from all tracking arrays
-function cleanupSoldToken(chatId, tokenAddr) {
-    // Remove from userTrades
-    if (userTrades[chatId]) {
-        userTrades[chatId] = userTrades[chatId].filter(t => t.address !== tokenAddr);
-    }
-    // Remove from userPositions
-    if (userPositions[chatId]) {
-        userPositions[chatId] = userPositions[chatId].filter(p => p.token !== tokenAddr);
-    }
-    // Remove from userTargetHits
-    if (userTargetHits[chatId]) {
-        userTargetHits[chatId] = userTargetHits[chatId].filter(t => t.address !== tokenAddr);
-    }
-    // Remove from userStopLossHits
-    if (userStopLossHits[chatId]) {
-        userStopLossHits[chatId] = userStopLossHits[chatId].filter(t => t.address !== tokenAddr);
-    }
-    // Also call Python DB cleanup
-    spawnPython("user_db.py", ["cleanup", String(chatId), tokenAddr]);
-    console.log(`[CLEANUP] Removed ${tokenAddr.slice(0,8)}... from all tracking for ${chatId}`);
-}
-
 function spawnPython(script, args = []) {
     const scriptPath = path.join(__dirname, script);
     console.log(`[SPAWN] Launching: python3 ${scriptPath} ${args.join(' ')}`);
@@ -59,34 +36,12 @@ function spawnPython(script, args = []) {
 // ------------------------------------------------------------------------------
 // ⚙️ SYSTEM CONFIGURATION & CONSTANTS
 // ------------------------------------------------------------------------------
-const BOT_TOKEN = process.env.TELEGRAM_TOKEN || "7246241507:AAGOvokvFkayC__UBd4Nk39KeDLzSUoSQzw";
+const BOT_TOKEN = process.env.TELEGRAM_TOKEN || "7246241507:AAF3Rafj_IfYm4QlNH2RpE9H6-BGJZtw75Y";
 const NETWORK = "mainnet-beta";
 const RPC_URL = clusterApiUrl(NETWORK);
 const LOG_FILE = "output.txt";
 const AWAIT_SAMPLE_TIMEOUT_MS = 3 * 60 * 1000;
-let SOL_TO_USD_RATE = 133.93;
-let lastSolPriceFetch = 0;
-
-async function fetchLiveSolPrice() {
-    try {
-        const now = Date.now();
-        if (now - lastSolPriceFetch < 60000) return SOL_TO_USD_RATE;
-        
-        const resp = await fetch("https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd");
-        const data = await resp.json();
-        if (data?.solana?.usd) {
-            SOL_TO_USD_RATE = data.solana.usd;
-            lastSolPriceFetch = now;
-            console.log("[PRICE] SOL updated to $" + SOL_TO_USD_RATE);
-        }
-    } catch (e) {
-        console.log("[PRICE] Fetch failed, using cached: $" + SOL_TO_USD_RATE);
-    }
-    return SOL_TO_USD_RATE;
-}
-
-fetchLiveSolPrice();
-setInterval(fetchLiveSolPrice, 60000); 
+const SOL_TO_USD_RATE = 133.93; 
 const REFRESH_INTERVAL_MS = 1000; 
 
 const PUMP_FUN_PROGRAM_ID = "6EF8rSdWkbzzqJuS2B73rw9URnR445as6U3LTmpxTazz";
@@ -100,9 +55,7 @@ const userState = {};
 const userPythonProcess = {};            
 const userTrades = {};            
 const userTargetHits = {};
-const userStopLossHits = {};
-const userPositions = {};  // Track positions for live profit
-const userInvestActive = {};  // Track which users have invest mode active: {chatId: [{token, buyPrice, amount, timestamp}]}      
+const userStopLossHits = {};      
 const liveMonitorIntervals = {}; 
 const systemAuditLogs = [];
 
@@ -317,13 +270,6 @@ function premiumMenu({ connected = false, balanceText = null, chatId = null, ext
         [{ text: buyAmountLabel, callback_data: "set_amount" }]
     ];
 
-    keyboard.push([{ text: "🔄    SWAP NOW    ".padEnd(PAD_WIDTH, " "), callback_data: "swap_now" }]);
-    keyboard.push([{ text: "📈    CHECK LIVE PROFIT    ".padEnd(PAD_WIDTH, " "), callback_data: "check_profit" }]);
-    keyboard.push([{ text: "💸    TRANSFER SOL    ".padEnd(PAD_WIDTH, " "), callback_data: "transfer_sol" }]);
-    keyboard.push([{ text: "🔍    VERIFY DEV RUG    ".padEnd(PAD_WIDTH, " "), callback_data: "verify_rug" }]);
-    keyboard.push([{ text: "📊    ANALYSE TOKEN    ".padEnd(PAD_WIDTH, " "), callback_data: "analyse_token" }]);
-    keyboard.push([{ text: "🔎    SEARCH TOKEN    ".padEnd(PAD_WIDTH, " "), callback_data: "search_token" }]);
-
     if (extraButtons && extraButtons.length) {
         keyboard.push(...extraButtons);
     }
@@ -401,9 +347,7 @@ bot.onText(/\/start/, async (msg) => {
             pumpFunActive: true,
             jitoEnabled: true
         };
-        // Cleanup each token from all tracking
-                results.forEach(r => cleanupSoldToken(chatId, r.addr));
-                userTrades[chatId] = [];
+        userTrades[chatId] = [];
         userTargetHits[chatId] = [];
     }
 
@@ -479,7 +423,7 @@ bot.on("callback_query", async (query) => {
         });
 
         proc.on("close", async () => {
-            cleanupSoldToken(chatId, trade.address);
+            userTrades[chatId].splice(idx, 1);
             let report = "✅ *SELL COMPLETE*";
             if (signatures.length > 0) {
                 report += `\n\n🔗 [View Transaction](https://solscan.io/tx/${signatures[0]})`;
@@ -548,7 +492,7 @@ bot.on("callback_query", async (query) => {
 
     if (data.startsWith("del_trade_")) {
         const idx = parseInt(data.split("_")[2]);
-        cleanupSoldToken(chatId, trade.address);
+        userTrades[chatId].splice(idx, 1);
         return showTradesList(chatId);
     }
 
@@ -634,270 +578,7 @@ bot.on("callback_query", async (query) => {
         return;
     }
 
-    if (data === "swap_now") {
-        if (!state.connected || !state.keypair) {
-            await updateStatusMessage(chatId, "Connect wallet first.", 5000);
-            return showMenu(chatId, "LUXE SOLANA WALLET");
-        }
-        state.awaitingSwapToken = true;
-        const sent = await bot.sendMessage(chatId, "Enter token address to swap:", { 
-            parse_mode: "Markdown",
-            reply_markup: { inline_keyboard: [[{ text: "BACK", callback_data: "back_home" }]] }
-        });
-        state.lastPromptId = sent.message_id;
-        return;
-    }
-
-    if (data === "check_profit") {
-        const positions = userPositions[chatId] || [];
-        if (positions.length === 0) {
-            await updateStatusMessage(chatId, "No positions to track.", 5000);
-            return showMenu(chatId, "LUXE SOLANA WALLET");
-        }
-        
-        await updateStatusMessage(chatId, "Fetching live prices...");
-        
-        let report = "LIVE PROFIT TRACKER\n\n";
-        const btns = [];
-        
-        for (let i = 0; i < positions.length; i++) {
-            const pos = positions[i];
-            try {
-                const resp = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${pos.token}`);
-                const data = await resp.json();
-                const currentPrice = parseFloat(data?.pairs?.[0]?.priceUsd || 0);
-                const pnlPercent = pos.buyPrice > 0 ? ((currentPrice - pos.buyPrice) / pos.buyPrice * 100).toFixed(2) : 0;
-                const emoji = pnlPercent >= 0 ? "+" : "";
-                const statusEmoji = pnlPercent >= 50 ? "G" : pnlPercent >= 0 ? "Y" : "R";
-                
-                report += `${i+1}. ${pos.symbol || pos.token.slice(0,8)}...\n`;
-                report += `   Buy: $${pos.buyPrice.toFixed(8)} | Now: $${currentPrice.toFixed(8)}\n`;
-                report += `   P&L: ${emoji}${pnlPercent}% ${statusEmoji}\n\n`;
-                
-                btns.push([{ text: `SELL #${i+1} ${pos.symbol || pos.token.slice(0,6)}`, callback_data: `profit_sell_${i}` }]);
-            } catch (e) {
-                report += `${i+1}. ${pos.token.slice(0,12)}... - Price fetch failed\n\n`;
-            }
-        }
-        
-        btns.push([{ text: "REFRESH", callback_data: "check_profit" }]);
-        btns.push([{ text: "BACK", callback_data: "back_home" }]);
-        
-        await bot.sendMessage(chatId, report, { 
-            parse_mode: "Markdown",
-            reply_markup: { inline_keyboard: btns }
-        });
-        return;
-    }
-
-    if (data.startsWith("profit_sell_")) {
-        const idx = parseInt(data.split("_")[2]);
-        const positions = userPositions[chatId] || [];
-        const pos = positions[idx];
-        if (!pos) {
-            await updateStatusMessage(chatId, "Position not found.", 5000);
-            return showMenu(chatId, "LUXE SOLANA WALLET");
-        }
-        
-        await updateStatusMessage(chatId, "Selling position...");
-        const pk = bs58.encode(Array.from(state.keypair.secretKey));
-        const pyProc = spawnPython("execute_sell.py", [pk, pos.token]);
-        let output = "";
-        pyProc.stdout.on("data", (d) => { output += d.toString(); });
-        pyProc.stderr.on("data", (d) => { output += d.toString(); });
-        pyProc.on("close", async (code) => {
-            const sigMatch = output.match(/([A-Za-z0-9]{32,88})/);
-            const success = code === 0 && sigMatch;
-            
-            if (success) {
-                // Only remove position on successful sell
-                cleanupSoldToken(chatId, pos.token);
-                const msg = `Position sold!\nTX: ${sigMatch[1]}`;
-                await updateStatusMessage(chatId, msg, 15000);
-            } else {
-                // Keep position on failure
-                const msg = `Sell failed. Position kept.\n${output.slice(0,150)}`;
-                await updateStatusMessage(chatId, msg, 10000);
-            }
-            return showMenu(chatId, "LUXE SOLANA WALLET");
-        });
-        return;
-    }
-
-    if (data === "confirm_swap") {
-        if (!state.pendingSwap) {
-            await updateStatusMessage(chatId, "No pending swap.", 5000);
-            return showMenu(chatId, "LUXE SOLANA WALLET");
-        }
-        
-        const { token, amount, tokenInfo } = state.pendingSwap;
-        state.pendingSwap = null;
-        
-        await updateStatusMessage(chatId, `Swapping ${amount} SOL for ${tokenInfo?.symbol || 'tokens'}...`);
-        
-        const pk = bs58.encode(Array.from(state.keypair.secretKey));
-        const pyProc = spawnPython("swap.py", [pk, token, String(amount)]);
-        let output = "";
-        pyProc.stdout.on("data", (d) => { output += d.toString(); });
-        pyProc.stderr.on("data", (d) => { output += d.toString(); });
-        pyProc.on("close", async (code) => {
-            try {
-                const result = JSON.parse(output.trim());
-                if (result.success) {
-                    // Add to positions for profit tracking
-                    if (!userPositions[chatId]) userPositions[chatId] = [];
-                    userPositions[chatId].push({
-                        token: token,
-                        symbol: tokenInfo?.symbol || "???",
-                        buyPrice: parseFloat(tokenInfo?.price_usd || 0),
-                        amount: amount,
-                        timestamp: Date.now()
-                    });
-                    
-                    // Also add to trades
-                    if (!userTrades[chatId]) userTrades[chatId] = [];
-                    userTrades[chatId].push({
-                        address: token,
-                        amount: amount,
-                        target: state.targetMultiplier || 2.0,
-                        stamp: new Date().toISOString()
-                    });
-                    
-                    const solscanLink = `https://solscan.io/tx/${result.tx_signature}`;
-                    const msgText = `<b>SWAP SUCCESSFUL</b>\n\n` +
-                        `<b>Token:</b> ${tokenInfo?.symbol || 'Unknown'}\n` +
-                        `<b>Amount:</b> ${amount} SOL\n` +
-                        `<b>Price:</b> $${tokenInfo?.price_usd || 'N/A'}\n\n` +
-                        `<a href="${solscanLink}">View TX on Solscan</a>\n\n` +
-                        `<code>${result.tx_signature}</code>`;
-                    
-                    await bot.sendMessage(chatId, msgText, { 
-                        parse_mode: "HTML",
-                        disable_web_page_preview: true,
-                        reply_markup: { inline_keyboard: [
-                            [{ text: "CHECK LIVE PROFIT", callback_data: "check_profit" }],
-                            [{ text: "BACK", callback_data: "back_home" }]
-                        ]}
-                    });
-                } else {
-                    await bot.sendMessage(chatId, `<b>SWAP FAILED</b>\n\n<code>${result.error || 'Unknown error'}</code>`, {
-                        parse_mode: "HTML",
-                        reply_markup: { inline_keyboard: [[{ text: "BACK", callback_data: "back_home" }]] }
-                    });
-                }
-            } catch (e) {
-                await updateStatusMessage(chatId, `Swap error: ${output.slice(0,200)}`, 10000);
-            }
-        });
-        return;
-    }
-
-    if (data === "cancel_swap") {
-        state.pendingSwap = null;
-        return showMenu(chatId, "LUXE SOLANA WALLET");
-    }
-
-        if (data === "verify_rug") {
-        state.awaitingVerifyRug = true;
-        const sent = await bot.sendMessage(chatId, "Enter token mint address to verify dev rug history:", { 
-            parse_mode: "Markdown",
-            reply_markup: { inline_keyboard: [[{ text: "BACK", callback_data: "back_home" }]] }
-        });
-        state.lastPromptId = sent.message_id;
-        return;
-    }
-
-    if (data === "analyse_token") {
-        state.awaitingAnalyse = true;
-        const sent = await bot.sendMessage(chatId, "Enter token mint address to analyse:", { 
-            parse_mode: "Markdown",
-            reply_markup: { inline_keyboard: [[{ text: "BACK", callback_data: "back_home" }]] }
-        });
-        state.lastPromptId = sent.message_id;
-        return;
-    }
-
-    if (data === "search_token") {
-        state.awaitingSearch = true;
-        const sent = await bot.sendMessage(chatId, "Enter token mint address to search:", { 
-            parse_mode: "Markdown",
-            reply_markup: { inline_keyboard: [[{ text: "BACK", callback_data: "back_home" }]] }
-        });
-        state.lastPromptId = sent.message_id;
-        return;
-    }
-
-    if (data === "trades") {
-        const trades = userTrades[chatId] || [];
-        if (trades.length === 0) {
-            const noneMsg = await bot.sendMessage(chatId, "No active trades.", { 
-                reply_markup: { inline_keyboard: [[{ text: "BACK", callback_data: "back_home" }]] } 
-            });
-            setTimeout(() => deleteMessageSafe(chatId, noneMsg.message_id), 5000);
-            return showMenu(chatId, "LUXE SOLANA WALLET");
-        }
-        let tradesText = "ACTIVE TRADES\n\n";
-        const btns = [];
-        trades.forEach((t, i) => {
-            tradesText += `${i+1}. ${t.address.slice(0,12)}...\nAmount: ${t.amount} SOL | Target: ${t.target}x\n\n`;
-            btns.push([{ text: `SELL #${i+1} ${t.address.slice(0,8)}...`, callback_data: `trade_sell_${i}` }]);
-        });
-        btns.push([{ text: "BACK", callback_data: "back_home" }]);
-        await bot.sendMessage(chatId, tradesText, { 
-            parse_mode: "Markdown",
-            reply_markup: { inline_keyboard: btns }
-        });
-        return;
-    }
-
-    if (data.startsWith("trade_sell_")) {
-        const idx = parseInt(data.split("_")[2]);
-        const trades = userTrades[chatId] || [];
-        const trade = trades[idx];
-        if (!trade || trades.length === 0) {
-            await updateStatusMessage(chatId, "Trade not found.", 5000);
-            return showMenu(chatId, "LUXE SOLANA WALLET");
-        }
-        const confirmKb = { 
-            inline_keyboard: [
-                [{ text: "CONFIRM SELL", callback_data: `exec_trade_sell_${idx}` }], 
-                [{ text: "CANCEL", callback_data: "trades" }]
-            ] 
-        };
-        await bot.sendMessage(chatId, `Confirm sell?\n\nToken: ${trade.address}`, { 
-            parse_mode: "Markdown", 
-            reply_markup: confirmKb 
-        });
-        return;
-    }
-
-    if (data.startsWith("exec_trade_sell_")) {
-        const idx = parseInt(data.split("_")[3]);
-        const trades = userTrades[chatId] || [];
-        const trade = trades[idx];
-        if (!trade || trades.length === 0) {
-            await updateStatusMessage(chatId, "Trade not found.", 5000);
-            return showMenu(chatId, "LUXE SOLANA WALLET");
-        }
-        await updateStatusMessage(chatId, "Executing sell...");
-        const pk = bs58.encode(Array.from(state.keypair.secretKey));
-        const pyProc = spawnPython("execute_sell.py", [pk, trade.address]);
-        let output = "";
-        pyProc.stdout.on("data", (d) => { output += d.toString(); });
-        pyProc.stderr.on("data", (d) => { output += d.toString(); });
-        pyProc.on("close", async (code) => {
-            cleanupSoldToken(chatId, trade.address);
-            const sigMatch = output.match(/([A-Za-z0-9]{32,88})/);
-            let msg = code === 0 && sigMatch ? 
-                `Sell complete!\nTX: ${sigMatch[1]}` : 
-                `Sell finished.\n${output.slice(0,200)}`;
-            await updateStatusMessage(chatId, msg, 15000);
-            return showMenu(chatId, "LUXE SOLANA WALLET");
-        });
-        return;
-    }
-
-        if (data === "balance") {
+    if (data === "balance") {
         if (!state.connected || !state.walletAddress) {
             await updateStatusMessage(chatId, "❌ Connect wallet first.", 5000);
             return;
@@ -925,7 +606,6 @@ bot.on("callback_query", async (query) => {
 
         if (!activeInvestQueue.includes(chatId)) {
             activeInvestQueue.push(chatId);
-            spawnPython("user_db.py", ["set_invest", String(chatId), "true"]);
             if (!state.targetMultiplier) state.targetMultiplier = 2.0;
             if (!state.buyAmount) state.buyAmount = 0.001;
 
@@ -954,33 +634,6 @@ bot.on("callback_query", async (query) => {
                                 spawnPython("execute_buy.py", [pk, tokenAddr, String(amt)]);
                                 if (!userTrades[targetId]) userTrades[targetId] = [];
                                 userTrades[targetId].push({ address: tokenAddr, amount: amt, target: targetState.targetMultiplier || 2.0, stamp: getTimestamp() });
-                                
-                                // Also add to positions for live profit tracking
-                                if (!userPositions[targetId]) userPositions[targetId] = [];
-                                // Fetch current price asynchronously
-                                fetch(`https://api.dexscreener.com/latest/dex/tokens/${tokenAddr}`)
-                                    .then(r => r.json())
-                                    .then(data => {
-                                        const price = parseFloat(data?.pairs?.[0]?.priceUsd || 0);
-                                        const symbol = data?.pairs?.[0]?.baseToken?.symbol || "???";
-                                        userPositions[targetId].push({
-                                            token: tokenAddr,
-                                            symbol: symbol,
-                                            buyPrice: price,
-                                            amount: amt,
-                                            timestamp: Date.now(),
-                                            source: "auto"
-                                        });
-                                    }).catch(() => {
-                                        userPositions[targetId].push({
-                                            token: tokenAddr,
-                                            symbol: "???",
-                                            buyPrice: 0,
-                                            amount: amt,
-                                            timestamp: Date.now(),
-                                            source: "auto"
-                                        });
-                                    });
 
                                 // AUTO-DELETE SYNC MSG
                                 await updateStatusMessage(targetId, `🚀 *OPPORTUNITY BOUGHT*\nAddr: \`${tokenAddr}\`\nAccount synchronized.`, 15000);
@@ -1009,9 +662,6 @@ bot.on("callback_query", async (query) => {
                                     spawnPython("execute_sell.py", [pk, sellAddr]); 
                                     const item = userTrades[targetId].splice(idx, 1)[0];
                                     
-                                    // Cleanup the sold token from tracking
-                                    cleanupSoldToken(targetId, sellAddr);
-                                    
                                     if (isStopLoss) {
                                         if (!userStopLossHits[targetId]) userStopLossHits[targetId] = [];
                                         userStopLossHits[targetId].push({ ...item, time: getTimestamp(), reason: "EMERGENCY EXIT" });
@@ -1037,95 +687,13 @@ bot.on("callback_query", async (query) => {
             await updateStatusMessage(chatId, "▶️ Bot Started. You are now in the Investment Queue.", 5000);
         } else {
             activeInvestQueue = activeInvestQueue.filter(id => id !== chatId);
-            spawnPython("user_db.py", ["set_invest", String(chatId), "false"]);
             if (userPythonProcess[chatId]) {
                 userPythonProcess[chatId].kill("SIGTERM");
                 userPythonProcess[chatId] = null;
             }
             await updateStatusMessage(chatId, "⛔ Bot Stopped. Removed from Investment Queue.", 5000);
         }
-        if (state.awaitingSwapToken) {
-        state.awaitingSwapToken = false;
-        const tokenAddr = text.trim();
-        if (tokenAddr.length < 30) {
-            await updateStatusMessage(chatId, "Invalid token address.", 5000);
-            return showMenu(chatId, "LUXE SOLANA WALLET");
-        }
-        state.pendingSwapToken = tokenAddr;
-        state.awaitingSwapAmount = true;
-        const sent = await bot.sendMessage(chatId, "Enter amount (e.g., 0.01 SOL or $5 USD):", { 
-            parse_mode: "Markdown",
-            reply_markup: { inline_keyboard: [[{ text: "BACK", callback_data: "back_home" }]] }
-        });
-        state.lastPromptId = sent.message_id;
-        return;
-    }
-
-    if (state.awaitingSwapAmount) {
-        state.awaitingSwapAmount = false;
-        let inputText = text.trim().toUpperCase();
-        let amountSol;
-        
-        const isUsd = inputText.includes("USD") || inputText.includes("$");
-        const numericValue = parseFloat(inputText.replace(/[^0-9.]/g, ""));
-        
-        if (isNaN(numericValue) || numericValue <= 0) {
-            await updateStatusMessage(chatId, "Invalid amount.", 5000);
-            return showMenu(chatId, "LUXE SOLANA WALLET");
-        }
-        
-        if (isUsd) {
-            await fetchLiveSolPrice();
-            amountSol = numericValue / SOL_TO_USD_RATE;
-            await updateStatusMessage(chatId, `Converting $${numericValue} to ${amountSol.toFixed(4)} SOL...`);
-        } else {
-            amountSol = numericValue;
-        }
-        
-        const amount = amountSol;
-        const tokenAddr = state.pendingSwapToken;
-        state.pendingSwapToken = null;
-        
-        await updateStatusMessage(chatId, "Fetching token info...");
-        
-        const pyProc = spawnPython("swap.py", ["info", tokenAddr]);
-        let output = "";
-        pyProc.stdout.on("data", (d) => { output += d.toString(); });
-        pyProc.stderr.on("data", (d) => { output += d.toString(); });
-        pyProc.on("close", async () => {
-            let tokenInfo = null;
-            try {
-                tokenInfo = JSON.parse(output.trim());
-            } catch (e) {}
-            
-            state.pendingSwap = { token: tokenAddr, amount: amount, tokenInfo: tokenInfo };
-            
-            let confirmText = "<b>CONFIRM SWAP</b>\n\n";
-            confirmText += `<b>Token:</b> ${tokenInfo?.name || "Unknown"} (${tokenInfo?.symbol || "???"})\n`;
-            confirmText += `<b>Address:</b> <code>${tokenAddr.slice(0,20)}...</code>\n`;
-            confirmText += `<b>Amount:</b> ${amount.toFixed(4)} SOL\n\n`;
-            
-            if (tokenInfo && !tokenInfo.error) {
-                confirmText += `<b>Price:</b> $${tokenInfo.price_usd}\n`;
-                confirmText += `<b>Liquidity:</b> $${Number(tokenInfo.liquidity).toLocaleString()}\n`;
-                confirmText += `<b>24h Volume:</b> $${Number(tokenInfo.volume_24h).toLocaleString()}\n`;
-                confirmText += `<b>24h Change:</b> ${tokenInfo.change_24h}%\n`;
-            }
-            
-            confirmText += "\nProceed with swap?";
-            
-            await bot.sendMessage(chatId, confirmText, {
-                parse_mode: "HTML",
-                reply_markup: { inline_keyboard: [
-                    [{ text: "CONFIRM SWAP", callback_data: "confirm_swap" }],
-                    [{ text: "CANCEL", callback_data: "cancel_swap" }]
-                ]}
-            });
-        });
-        return;
-    }
-
-    await showMenu(chatId, "⚜️ Investment Panel");
+        await showMenu(chatId, "⚜️ Investment Panel");
         return;
     }
 
@@ -1138,7 +706,6 @@ bot.on("callback_query", async (query) => {
         state.walletAddress = null;
         state.keypair = null;
         activeInvestQueue = activeInvestQueue.filter(id => id !== chatId);
-            spawnPython("user_db.py", ["set_invest", String(chatId), "false"]);
         if (userPythonProcess[chatId]) {
             userPythonProcess[chatId].kill("SIGTERM");
             userPythonProcess[chatId] = null;
@@ -1355,27 +922,156 @@ bot.on("message", async (msg) => {
         return;
     }
 
-    await showMenu(chatId, "👑 *LUXE SOLANA WALLET* 👑");
+    // SEARCH TOKEN handler
+    if (state.awaitingSearch) {
+        state.awaitingSearch = false;
+        const tokenAddr = text.trim();
+        if (tokenAddr.length < 30) {
+            await updateStatusMessage(chatId, "Invalid token address.", 5000);
+            return showMenu(chatId, "LUXE SOLANA WALLET");
+        }
+        await updateStatusMessage(chatId, "Searching token...");
+        const pyProc = spawnPython("search_token.py", [tokenAddr]);
+        let output = "";
+        pyProc.stdout.on("data", (d) => { output += d.toString(); });
+        pyProc.stderr.on("data", (d) => { output += d.toString(); });
+        pyProc.on("close", async () => {
+            const resultMsg = await bot.sendMessage(chatId, "<pre>" + (output.trim() || "No data found") + "</pre>", {
+                parse_mode: "HTML",
+                reply_markup: { inline_keyboard: [[{ text: "BACK", callback_data: "back_home" }]] }
+            });
+            setTimeout(() => deleteMessageSafe(chatId, resultMsg.message_id), 120000);
+        });
+        return;
+    }
+
+    // ANALYSE TOKEN handler
+    if (state.awaitingAnalysis) {
+        state.awaitingAnalysis = false;
+        const tokenAddr = text.trim();
+        if (tokenAddr.length < 30) {
+            await updateStatusMessage(chatId, "Invalid token address.", 5000);
+            return showMenu(chatId, "LUXE SOLANA WALLET");
+        }
+        await updateStatusMessage(chatId, "Analysing token...");
+        const pyProc = spawnPython("analysis_fast.py", [tokenAddr]);
+        let output = "";
+        pyProc.stdout.on("data", (d) => { output += d.toString(); });
+        pyProc.stderr.on("data", (d) => { output += d.toString(); });
+        pyProc.on("close", async () => {
+            const resultMsg = await bot.sendMessage(chatId, "<pre>" + (output.trim() || "Analysis failed") + "</pre>", {
+                parse_mode: "HTML",
+                reply_markup: { inline_keyboard: [[{ text: "BACK", callback_data: "back_home" }]] }
+            });
+            setTimeout(() => deleteMessageSafe(chatId, resultMsg.message_id), 120000);
+        });
+        return;
+    }
+
+    // VERIFY RUG handler
+    if (state.awaitingVerifyRug) {
+        state.awaitingVerifyRug = false;
+        const tokenAddr = text.trim();
+        if (tokenAddr.length < 30) {
+            await updateStatusMessage(chatId, "Invalid token address.", 5000);
+            return showMenu(chatId, "LUXE SOLANA WALLET");
+        }
+        await updateStatusMessage(chatId, "Checking rug status...");
+        const pyProc = spawnPython("verify_rug_fast.py", [tokenAddr]);
+        let output = "";
+        pyProc.stdout.on("data", (d) => { output += d.toString(); });
+        pyProc.stderr.on("data", (d) => { output += d.toString(); });
+        pyProc.on("close", async () => {
+            const resultMsg = await bot.sendMessage(chatId, "<pre>" + (output.trim() || "Check failed") + "</pre>", {
+                parse_mode: "HTML",
+                reply_markup: { inline_keyboard: [[{ text: "BACK", callback_data: "back_home" }]] }
+            });
+            setTimeout(() => deleteMessageSafe(chatId, resultMsg.message_id), 120000);
+        });
+        return;
+    }
+
+    // SWAP TOKEN handler
+    if (state.awaitingSwapToken) {
+        state.awaitingSwapToken = false;
+        const tokenAddr = text.trim();
+        if (tokenAddr.length < 30) {
+            await updateStatusMessage(chatId, "Invalid token address.", 5000);
+            return showMenu(chatId, "LUXE SOLANA WALLET");
+        }
+        state.pendingSwapToken = tokenAddr;
+        state.awaitingSwapAmount = true;
+        const sent = await bot.sendMessage(chatId, "Enter amount (e.g., 0.01 SOL or $5 USD):", { 
+            parse_mode: "Markdown",
+            reply_markup: { inline_keyboard: [[{ text: "BACK", callback_data: "back_home" }]] }
+        });
+        state.lastPromptId = sent.message_id;
+        return;
+    }
+
+    // SWAP AMOUNT handler
+    if (state.awaitingSwapAmount) {
+        state.awaitingSwapAmount = false;
+        let inputText = text.trim().toUpperCase();
+        const isUsd = inputText.includes("USD") || inputText.includes("$");
+        const numericValue = parseFloat(inputText.replace(/[^0-9.]/g, ""));
+        
+        if (isNaN(numericValue) || numericValue <= 0) {
+            await updateStatusMessage(chatId, "Invalid amount.", 5000);
+            return showMenu(chatId, "LUXE SOLANA WALLET");
+        }
+        
+        let amountSol;
+        if (isUsd) {
+            await fetchLiveSolPrice();
+            amountSol = numericValue / SOL_TO_USD_RATE;
+            await updateStatusMessage(chatId, "Converting $" + numericValue + " to " + amountSol.toFixed(4) + " SOL...");
+        } else {
+            amountSol = numericValue;
+        }
+        
+        const tokenAddr = state.pendingSwapToken;
+        state.pendingSwapToken = null;
+        
+        await updateStatusMessage(chatId, "Fetching token info...");
+        
+        const pyProc = spawnPython("swap.py", ["info", tokenAddr]);
+        let output = "";
+        pyProc.stdout.on("data", (d) => { output += d.toString(); });
+        pyProc.stderr.on("data", (d) => { output += d.toString(); });
+        pyProc.on("close", async () => {
+            let tokenInfo = null;
+            try { tokenInfo = JSON.parse(output.trim()); } catch (e) {}
+            
+            state.pendingSwap = { token: tokenAddr, amount: amountSol, tokenInfo: tokenInfo };
+            
+            let confirmText = "<b>CONFIRM SWAP</b>\n\n";
+            confirmText += "<b>Token:</b> " + (tokenInfo?.name || "Unknown") + " (" + (tokenInfo?.symbol || "???") + ")\n";
+            confirmText += "<b>Address:</b> <code>" + tokenAddr.slice(0,20) + "...</code>\n";
+            confirmText += "<b>Amount:</b> " + amountSol.toFixed(4) + " SOL\n\n";
+            
+            if (tokenInfo && !tokenInfo.error) {
+                confirmText += "<b>Price:</b> $" + tokenInfo.price_usd + "\n";
+                confirmText += "<b>Liquidity:</b> $" + Number(tokenInfo.liquidity || 0).toLocaleString() + "\n";
+                confirmText += "<b>24h Volume:</b> $" + Number(tokenInfo.volume_24h || 0).toLocaleString() + "\n";
+                confirmText += "<b>24h Change:</b> " + (tokenInfo.change_24h || 0) + "%\n";
+            }
+            
+            confirmText += "\nProceed with swap?";
+            
+            await bot.sendMessage(chatId, confirmText, {
+                parse_mode: "HTML",
+                reply_markup: { inline_keyboard: [
+                    [{ text: "CONFIRM SWAP", callback_data: "confirm_swap" }],
+                    [{ text: "CANCEL", callback_data: "cancel_swap" }]
+                ]}
+            });
+        });
+        return;
+    }
+
+    await showMenu(chatId, "LUXE SOLANA WALLET");
 });
 
 bot.on("polling_error", (err) => { logToFile("Polling Error: " + err.message); });
 console.log("💎 LUXE SOLANA BOT V6.0 STARTED — MULTI-BUY QUEUE ACTIVE");
-// Reload active investors from database on startup
-(async () => {
-    const proc = spawnPython("user_db.py", ["get_active"]);
-    let out = "";
-    proc.stdout.on("data", d => out += d.toString());
-    proc.on("close", () => {
-        try {
-            const data = JSON.parse(out.trim());
-            if (data.investors && data.investors.length) {
-                data.investors.forEach(id => {
-                    userInvestActive[id] = true;
-                    if (!activeInvestQueue.includes(id)) activeInvestQueue.push(id);
-                });
-                console.log("[DB] Loaded " + data.investors.length + " active investors from database");
-            }
-        } catch(e) {}
-    });
-})();
-
