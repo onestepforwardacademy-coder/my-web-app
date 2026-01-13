@@ -1,31 +1,30 @@
 # scanner.py
-# Playwright (Stable Fix) + OCR + Dexscreener search utilities
-
 import time
 import re
 import requests
 import os
 import sqlite3
+import sys
 from datetime import datetime, timezone
-from PIL import Image as PILImage, ImageEnhance, ImageOps
+from PIL import Image as PILImage, ImageEnhance
 import pytesseract
 from typing import List, Tuple, Optional, Dict
 
-# Switch to Playwright for the "Forever Fix"
+# Playwright Engine
 from playwright.sync_api import sync_playwright
-# NEW: Import stealth to bypass bot protection
-try:
-    from playwright_stealth import stealth_sync
-except ImportError:
-    stealth_sync = None
 
-# Database path on your VPS
-DB_PATH = "/root/my-web-app/scanner_data.db"
+# Database configuration
+DB_PATH = "scanner_data.db"
 
-# ----- memory helpers -----
+# ----- Database Helpers -----
 def init_db():
     conn = sqlite3.connect(DB_PATH)
-    conn.execute('CREATE TABLE IF NOT EXISTS seen_pairs (pair_address TEXT PRIMARY KEY, found_at DATETIME DEFAULT CURRENT_TIMESTAMP)')
+    cursor = conn.cursor()
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS seen_pairs 
+        (pair_address TEXT PRIMARY KEY, timestamp DATETIME DEFAULT CURRENT_TIMESTAMP)
+    ''')
+    conn.commit()
     conn.close()
 
 def load_seen_pairs() -> set:
@@ -44,198 +43,135 @@ def load_seen_pairs() -> set:
 def save_seen_pair(pair_address: str) -> None:
     try:
         conn = sqlite3.connect(DB_PATH)
-        conn.execute("INSERT OR IGNORE INTO seen_pairs (pair_address) VALUES (?)", (pair_address,))
+        cursor = conn.cursor()
+        cursor.execute("INSERT OR IGNORE INTO seen_pairs (pair_address) VALUES (?)", (pair_address,))
         conn.commit()
         conn.close()
     except Exception as e:
         print(f"❌ DB Save Error: {e}")
 
-# ----- formatting -----
-def format_age_dynamic(created_timestamp_ms: int) -> str:
-    created_dt = datetime.fromtimestamp(created_timestamp_ms / 1000, tz=timezone.utc)
-    now = datetime.now(timezone.utc)
-    delta = now - created_dt
-    total_minutes = int(delta.total_seconds() // 60)
-    if total_minutes < 60:
-        return f"{total_minutes}m"
-    total_hours = total_minutes // 60
-    minutes = total_minutes % 60
-    if total_hours < 24:
-        return f"{total_hours}h {minutes}m"
-    return f"{total_hours // 24}d"
-
-# ----- Dexscreener profile fetch -----
+# ----- Dexscreener API Fetch -----
 def get_profile_info(token_mint: str) -> Optional[Dict]:
     url = f"https://api.dexscreener.com/latest/dex/search?q={token_mint}"
     try:
         response = requests.get(url, timeout=10)
         data = response.json()
-    except Exception:
+        pairs = data.get("pairs")
+        if not pairs: return None
+        
+        pair = pairs[0]
+        info = pair.get("info", {})
+        return {
+            "token_name": pair.get("baseToken", {}).get("name", "Unknown"),
+            "token_symbol": pair.get("baseToken", {}).get("symbol", ""),
+            "pair_url": pair.get("url"),
+            "image": info.get("imageUrl"),
+            "socials": info.get("socials")
+        }
+    except:
         return None
 
-    pairs = data.get("pairs")
-    if not pairs: return None
-    pair = pairs[0]
-    info = pair.get("info", {})
-    return {
-        "token_name": pair.get("baseToken", {}).get("name", "Unknown"),
-        "token_symbol": pair.get("baseToken", {}).get("symbol", ""),
-        "pair_url": pair.get("url"),
-        "image": info.get("imageUrl"),
-        "socials": info.get("socials")
-    }
-
-# ----- Collector / public list -----
+# ----- Search Logic -----
 new_pairs_to_buy: List[str] = []
 
-def collect_new_pair(token_mint: str) -> None:
-    if token_mint not in new_pairs_to_buy:
-        new_pairs_to_buy.append(token_mint)
-
-# ----- Dexscreener search for Solana mint -----
 def search_solana_by_mint(token_mint: str) -> None:
+    print(f"📡 API Check: {token_mint}")
     url = f"https://api.dexscreener.com/latest/dex/search?q={token_mint}"
     try:
         r = requests.get(url, timeout=10)
-        r.raise_for_status()
         data = r.json()
-    except Exception as e:
-        print(f"❌ Failed to fetch Dexscreener data for {token_mint}: {e}")
+    except:
         return
 
     pairs = data.get("pairs", [])
-    sol_pairs = [p for p in pairs if p.get("chainId") == "solana"]
-    pump_pairs = [p for p in sol_pairs if p.get("dexId") in ["pumpswap", "pumpfun"]]
-
-    final_pairs: List[Tuple[dict, dict]] = []
-    for p in pump_pairs:
-        pair_created_at = p.get("pairCreatedAt")
-        if not pair_created_at: continue
-        age_minutes = (datetime.now(timezone.utc) - datetime.fromtimestamp(pair_created_at / 1000, tz=timezone.utc)).total_seconds() / 60
-        if age_minutes > 120: continue
-        
-        token_mint_address = p.get("baseToken", {}).get("address")
-        profile = get_profile_info(token_mint_address)
-        if profile:
-            final_pairs.append((p, profile))
-
     seen_pairs = load_seen_pairs()
-    for i, (p, profile) in enumerate(final_pairs, 1):
-        pair_address = p.get("pairAddress")
-        token_mint = p.get("baseToken", {}).get("address")
-        
-        if not token_mint.endswith("pump"): continue
 
-        if pair_address in seen_pairs:
-            print(f"♻️ {profile['token_symbol']} APPEARED BEFORE")
-        else:
-            print(f"🆕 NEW TOKEN: {profile['token_symbol']}")
-            save_seen_pair(pair_address)
-            collect_new_pair(token_mint)
+    for p in pairs:
+        if p.get("chainId") == "solana" and p.get("dexId") == "pumpswap":
+            pair_addr = p.get("pairAddress")
+            mint_addr = p.get("baseToken", {}).get("address")
 
-# ----- THE FOREVER FIX: Playwright Engine -----
-def run_selenium_screenshot(
-    screenshot_path: str = "/tmp/dexscreener_full_screenshot.png",
-    headless: bool = True
-) -> str:
+            if pair_addr in seen_pairs:
+                continue
+
+            if not mint_addr.endswith("pump"):
+                continue
+
+            print(f"🌟 Found New: {mint_addr}")
+            save_seen_pair(pair_addr)
+            if mint_addr not in new_pairs_to_buy:
+                new_pairs_to_buy.append(mint_addr)
+
+# ----- Playwright Screenshot (The "No Output" Fix) -----
+def run_selenium_screenshot(screenshot_path: str = "scan.png") -> str:
+    print("🚀 Starting Playwright Browser...")
     with sync_playwright() as p:
-        browser = p.chromium.launch(
-            headless=headless,
-            args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-blink-features=AutomationControlled"]
-        )
+        # Args added to bypass VPS detection
+        browser = p.chromium.launch(headless=True, args=[
+            "--no-sandbox", 
+            "--disable-setuid-sandbox",
+            "--disable-blink-features=AutomationControlled"
+        ])
         
         context = browser.new_context(
-            viewport={'width': 1920, 'height': 1080},
+            viewport={'width': 1280, 'height': 1000},
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         )
         page = context.new_page()
 
-        if stealth_sync:
-            stealth_sync(page)
-
         try:
-            url = "https://dexscreener.com/?rankBy=pairAge&order=asc&chainIds=solana&dexIds=pumpswap,pumpfun&maxAge=2&profile=1"
+            target_url = "https://dexscreener.com/?rankBy=pairAge&order=asc&chainIds=solana&dexIds=pumpswap,pumpfun&maxAge=2&profile=1"
+            print(f"🌐 Loading: {target_url}")
             
-            print(f"🚀 Navigating to Dexscreener...")
-            # Increased timeout for slower VPS connections
-            page.goto(url, wait_until="domcontentloaded", timeout=90000)
+            # Using 'domcontentloaded' instead of 'networkidle' to prevent hanging
+            page.goto(target_url, wait_until="domcontentloaded", timeout=60000)
             
-            # --- CLOUDFLARE CHALLENGE DETECTION ---
-            print("🛡️ Checking for Cloudflare/Bot walls...")
-            for i in range(6):  # Check for up to 30 seconds
-                content = page.content()
-                if "Just a moment" in content or "Verify you are human" in content:
-                    print(f"🔄 Challenge page detected (Attempt {i+1}/6)... waiting 5s...")
-                    page.wait_for_timeout(5000)
-                else:
-                    break
+            print("⏳ Waiting for Dexscreener table...")
+            page.wait_for_timeout(10000) # Give it 10s to load tokens
             
-            # --- DATA TABLE VERIFICATION ---
-            print("⏳ Final check for data table...")
-            try:
-                # Wait for the actual table rows to exist in the DOM
-                page.wait_for_selector('a.ds-dex-table-row', timeout=20000)
-                print("✅ Table rows detected!")
-            except:
-                print("⚠️ Table didn't load in time. Likely blocked.")
-                page.screenshot(path="/tmp/debug_view.png")
-                print("📸 Debug image saved to /tmp/debug_view.png")
-
-            # Scroll to trigger lazy-loaded elements
-            page.mouse.wheel(0, 1000)
-            page.wait_for_timeout(3000) 
-
-            # Take high-def screenshot
-            page.screenshot(path=screenshot_path, full_page=True)
-            print(f"✅ Success: Screenshot saved to {screenshot_path}")
-
+            page.screenshot(path=screenshot_path)
+            print(f"📸 Screenshot Captured: {screenshot_path}")
+            
         except Exception as e:
-            print(f"❌ Screenshot Error: {e}")
-            page.screenshot(path="/tmp/error_crash.png")
+            print(f"❌ Playwright Failed: {e}")
         finally:
             browser.close()
-
+            
     return screenshot_path
 
+# ----- OCR Logic -----
 def ocr_extract_pair_symbols(screenshot_path: str) -> List[str]:
-    print("🔍 Analyzing screenshot for symbols...")
-    try:
-        img = PILImage.open(screenshot_path).convert('L')
-        # Triple resize for better small-text recognition
-        img = img.resize((img.width * 3, img.height * 3), resample=PILImage.LANCZOS)
-        enhancer = ImageEnhance.Contrast(img)
-        img = enhancer.enhance(2.5)
-        
-        # PSM 11 is optimized for sparse text/tables
-        custom_config = r'--psm 11 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789/'
-        text = pytesseract.image_to_string(img, config=custom_config)
-        
-        pattern = re.compile(r'([A-Z0-9]{3,})\s*/')
-        pair_symbols = list(dict.fromkeys(pattern.findall(text.upper())))
-        return pair_symbols
-    except Exception as e:
-        print(f"❌ OCR Process Error: {e}")
+    print("🔍 OCR Reading...")
+    if not os.path.exists(screenshot_path):
+        print("❌ Error: Screenshot file not found!")
         return []
 
+    img = PILImage.open(screenshot_path).convert('L')
+    img = ImageEnhance.Contrast(img).enhance(2.0)
+    
+    text = pytesseract.image_to_string(img)
+    print(f"📝 Raw OCR Data Length: {len(text)}")
+    
+    symbols = list(set(re.findall(r'([A-Z0-9]{3,10})\s*/', text)))
+    print(f"✅ Found Symbols: {symbols}")
+    return symbols
+
+# ----- Main Run -----
 def run_scan_and_search() -> List[str]:
-    init_db()
     global new_pairs_to_buy
     new_pairs_to_buy = []
-
-    shot = run_selenium_screenshot()
-    if not os.path.exists(shot) or os.path.getsize(shot) == 0:
-        return []
-
-    pair_symbols = ocr_extract_pair_symbols(shot)
-    if not pair_symbols:
-        print("⚠️ No symbols found. The table might be empty or blocked.")
-        return []
-
-    print(f"✅ Found {len(pair_symbols)} potential symbols. Searching profiles...\n")
-    for token in pair_symbols:
-        search_solana_by_mint(token)
-
+    
+    print(f"\n--- SCAN START [{datetime.now().strftime('%H:%M:%S')}] ---")
+    
+    path = run_selenium_screenshot()
+    symbols = ocr_extract_pair_symbols(path)
+    
+    for s in symbols:
+        search_solana_by_mint(s)
+        
+    print(f"--- SCAN FINISHED ---\n")
     return new_pairs_to_buy
 
+# This part ensures it runs when you type 'python3 scanner.py'
 if __name__ == "__main__":
     run_scan_and_search()
