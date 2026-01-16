@@ -19,16 +19,6 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 // Helper to spawn Python scripts with correct paths
-
-// Cleanup sold token from all tracking arrays
-function cleanupSoldToken(chatId, tokenAddr) {
-    if (userTrades[chatId]) userTrades[chatId] = userTrades[chatId].filter(t => t.address !== tokenAddr);
-    if (userPositions[chatId]) userPositions[chatId] = userPositions[chatId].filter(p => p.token !== tokenAddr);
-    if (userTargetHits[chatId]) userTargetHits[chatId] = userTargetHits[chatId].filter(t => t.address !== tokenAddr);
-    if (userStopLossHits[chatId]) userStopLossHits[chatId] = userStopLossHits[chatId].filter(t => t.address !== tokenAddr);
-    spawnPython("user_db.py", ["cleanup", String(chatId), tokenAddr]);
-}
-
 function spawnPython(script, args = []) {
     const scriptPath = path.join(__dirname, script);
     console.log(`[SPAWN] Launching: python3 ${scriptPath} ${args.join(' ')}`);
@@ -46,7 +36,7 @@ function spawnPython(script, args = []) {
 // ------------------------------------------------------------------------------
 // ⚙️ SYSTEM CONFIGURATION & CONSTANTS
 // ------------------------------------------------------------------------------
-const BOT_TOKEN = process.env.TELEGRAM_TOKEN || "7970793585:AAGZtaI13S8ZfAjcbWUUR4P1opOrHrrJ-OA";
+const BOT_TOKEN = process.env.TELEGRAM_TOKEN || "7246241507:AAF3Rafj_IfYm4QlNH2RpE9H6-BGJZtw75Y";
 const NETWORK = "mainnet-beta";
 const RPC_URL = clusterApiUrl(NETWORK);
 const LOG_FILE = "output.txt";
@@ -97,8 +87,7 @@ const bot = new TelegramBot(BOT_TOKEN, {
 // ------------------------------------------------------------------------------
 // 🔌 EXTERNAL MODULE INTEGRATION (INLINE)
 // ------------------------------------------------------------------------------
-import { getExtraButtons as getExtraBtns } from "./extra_buttons.js";
-const extraButtons = getExtraBtns();
+const extraButtons = [];
 
 function attachExtraButtons(botInstance, stateRef) {
     console.log("[EXTRA_BUTTONS] Module initialized (inline mode)");
@@ -726,76 +715,7 @@ bot.on("callback_query", async (query) => {
         return;
     }
 
-    
-    // SEARCH TOKEN
-    if (data === "search_token") {
-        state.awaitingSearch = true;
-        const sent = await bot.sendMessage(chatId, "🔍 *Enter token mint address:*", { parse_mode: "Markdown", reply_markup: { inline_keyboard: [[{ text: "⬅️ BACK", callback_data: "back_home" }]] } });
-        state.lastPromptId = sent.message_id;
-        return;
-    }
-    // ANALYSE TOKEN
-    if (data === "analyse_token") {
-        state.awaitingAnalysis = true;
-        const sent = await bot.sendMessage(chatId, "📊 *Enter token mint address to analyse:*", { parse_mode: "Markdown", reply_markup: { inline_keyboard: [[{ text: "⬅️ BACK", callback_data: "back_home" }]] } });
-        state.lastPromptId = sent.message_id;
-        return;
-    }
-    // VERIFY RUG
-    if (data === "verify_rug") {
-        state.awaitingVerifyRug = true;
-        const sent = await bot.sendMessage(chatId, "🔎 *Enter token mint address to verify:*", { parse_mode: "Markdown", reply_markup: { inline_keyboard: [[{ text: "⬅️ BACK", callback_data: "back_home" }]] } });
-        state.lastPromptId = sent.message_id;
-        return;
-    }
-    // SWAP NOW
-    if (data === "swap_now") {
-        if (!state.connected || !state.keypair) { await updateStatusMessage(chatId, "❌ Connect wallet first.", 5000); return; }
-        state.awaitingSwapToken = true;
-        const sent = await bot.sendMessage(chatId, "💱 *Enter token mint address to swap:*", { parse_mode: "Markdown", reply_markup: { inline_keyboard: [[{ text: "⬅️ BACK", callback_data: "back_home" }]] } });
-        state.lastPromptId = sent.message_id;
-        return;
-    }
-    // CHECK PROFIT
-    if (data === "check_profit") {
-        const positions = userPositions[chatId] || [];
-        if (positions.length === 0) { await updateStatusMessage(chatId, "📊 No positions to track.", 5000); return; }
-        let profitText = "📊 *LIVE PROFIT/LOSS*\n\n";
-        for (const pos of positions) {
-            try {
-                const r = await fetch("https://api.dexscreener.com/latest/dex/tokens/" + pos.token);
-                const d = await r.json();
-                const price = parseFloat(d?.pairs?.[0]?.priceUsd || 0);
-                const pnl = pos.buyPrice > 0 ? ((price - pos.buyPrice) / pos.buyPrice * 100) : 0;
-                profitText += (pnl >= 0 ? "🟢" : "🔴") + " " + (pos.symbol || "???") + ": " + pnl.toFixed(2) + "%\n";
-            } catch(e) { profitText += "⚪ " + (pos.symbol || "???") + ": Error\n"; }
-        }
-        const btns = positions.map((p, i) => [{ text: "💰 SELL " + (p.symbol || p.token.slice(0,8)), callback_data: "profit_sell_" + i }]);
-        btns.push([{ text: "⬅️ BACK", callback_data: "back_home" }]);
-        await bot.sendMessage(chatId, profitText, { parse_mode: "Markdown", reply_markup: { inline_keyboard: btns } });
-        return;
-    }
-    // PROFIT SELL
-    if (data.startsWith("profit_sell_")) {
-        const idx = parseInt(data.split("_")[2]);
-        const pos = userPositions[chatId]?.[idx];
-        if (!pos) return;
-        await bot.sendMessage(chatId, "⚠️ *CONFIRM SELL*\n\nToken: " + (pos.symbol || pos.token.slice(0,12)) + "\nExecute?", { parse_mode: "Markdown", reply_markup: { inline_keyboard: [[{ text: "✅ CONFIRM", callback_data: "confirm_profit_sell_" + idx }], [{ text: "❌ CANCEL", callback_data: "check_profit" }]] } });
-        return;
-    }
-    // CONFIRM PROFIT SELL
-    if (data.startsWith("confirm_profit_sell_")) {
-        const idx = parseInt(data.split("_")[3]);
-        const pos = userPositions[chatId]?.[idx];
-        if (!pos || !state.keypair) return;
-        await updateStatusMessage(chatId, "🚀 Executing sell...");
-        const pk = bs58.encode(Array.from(state.keypair.secretKey));
-        const proc = spawnPython("execute_sell.py", [pk, pos.token]);
-        proc.on("close", async () => { cleanupSoldToken(chatId, pos.token); await updateStatusMessage(chatId, "✅ Sold " + (pos.symbol || pos.token.slice(0,8)), 10000); });
-        return;
-    }
-
-if (data === "back_home") {
+    if (data === "back_home") {
         await showMenu(chatId, "👑 *LUXE SOLANA WALLET* 👑");
         return;
     }
@@ -947,116 +867,6 @@ bot.on("message", async (msg) => {
             await updateStatusMessage(chatId, `💰 Amount set to ${val} SOL`, 5000);
         }
         await showMenu(chatId, "⚜️ Investment Panel");
-        return;
-    }
-
-    // VERIFY DEV RUG - Uses Playwright scraping (verify_rug_ave.py)
-    if (state.awaitingVerifyRug) {
-        state.awaitingVerifyRug = false;
-        const tokenAddr = text.trim();
-        await updateStatusMessage(chatId, "🔍 Scanning token for rug pull risks...");
-        const pyProc = spawnPython("verify_rug_ave.py", [tokenAddr]);
-        let output = "";
-        pyProc.stdout.on("data", (d) => { output += d.toString(); });
-        pyProc.stderr.on("data", (d) => { output += d.toString(); });
-        pyProc.on("close", async () => {
-            const result = output.trim() || "No data returned";
-            const msg = await bot.sendMessage(chatId, "🛡️ *DEV RUG CHECK*\n\n" + result, {
-                parse_mode: "Markdown",
-                reply_markup: { inline_keyboard: [[{ text: "⬅️ BACK", callback_data: "back_home" }]] }
-            });
-            setTimeout(() => deleteMessageSafe(chatId, msg.message_id), 60000);
-        });
-        return;
-    }
-
-    // SWAP NOW - Uses Jupiter API (swap_manual.py)
-    if (state.awaitingSwapToken) {
-        state.awaitingSwapToken = false;
-        const tokenAddr = text.trim();
-        if (!state.keypair) {
-            await updateStatusMessage(chatId, "❌ Wallet not connected.", 5000);
-            await showMenu(chatId, "👑 *LUXE SOLANA WALLET* 👑");
-            return;
-        }
-        state.pendingSwapMint = tokenAddr;
-        state.awaitingSwapAmount = true;
-        const sent = await bot.sendMessage(chatId, "💰 *Enter amount of SOL to swap:*", {
-            parse_mode: "Markdown",
-            reply_markup: { inline_keyboard: [[{ text: "⬅️ BACK", callback_data: "back_home" }]] }
-        });
-        state.lastPromptId = sent.message_id;
-        return;
-    }
-
-    // SWAP AMOUNT
-    if (state.awaitingSwapAmount) {
-        state.awaitingSwapAmount = false;
-        const amount = parseFloat(text);
-        if (isNaN(amount) || amount <= 0) {
-            await updateStatusMessage(chatId, "❌ Invalid amount.", 5000);
-            await showMenu(chatId, "👑 *LUXE SOLANA WALLET* 👑");
-            return;
-        }
-        const tokenAddr = state.pendingSwapMint;
-        state.pendingSwapMint = null;
-        const secretBase58 = bs58.encode(Array.from(state.keypair.secretKey));
-        await updateStatusMessage(chatId, "🔄 *Executing swap via Jupiter...*");
-        const pyProc = spawnPython("swap_manual.py", [secretBase58, tokenAddr, String(amount)]);
-        let output = "";
-        pyProc.stdout.on("data", (d) => { output += d.toString(); });
-        pyProc.stderr.on("data", (d) => { output += d.toString(); });
-        pyProc.on("close", async () => {
-            const result = output.trim() || "Swap failed";
-            const msg = await bot.sendMessage(chatId, "💱 *SWAP RESULT*\n\n" + result, {
-                parse_mode: "Markdown",
-                disable_web_page_preview: true,
-                reply_markup: { inline_keyboard: [[{ text: "⬅️ BACK", callback_data: "back_home" }]] }
-            });
-            setTimeout(() => deleteMessageSafe(chatId, msg.message_id), 60000);
-        });
-        return;
-    }
-
-    // SEARCH TOKEN - Uses Dexscreener API (search_token.py)
-    if (state.awaitingSearch) {
-        state.awaitingSearch = false;
-        const tokenAddr = text.trim();
-        await updateStatusMessage(chatId, "🔍 Searching token...");
-        const pyProc = spawnPython("search_token.py", [tokenAddr]);
-        let output = "";
-        pyProc.stdout.on("data", (d) => { output += d.toString(); });
-        pyProc.stderr.on("data", (d) => { output += d.toString(); });
-        pyProc.on("close", async () => {
-            const result = output.trim() || "No data found";
-            const msg = await bot.sendMessage(chatId, "🔍 *TOKEN SEARCH*\n\n" + result, {
-                parse_mode: "Markdown",
-                disable_web_page_preview: true,
-                reply_markup: { inline_keyboard: [[{ text: "⬅️ BACK", callback_data: "back_home" }]] }
-            });
-            setTimeout(() => deleteMessageSafe(chatId, msg.message_id), 60000);
-        });
-        return;
-    }
-
-    // ANALYSE TOKEN - Uses fast API analysis (analysis_fast.py)
-    if (state.awaitingAnalysis) {
-        state.awaitingAnalysis = false;
-        const tokenAddr = text.trim();
-        await updateStatusMessage(chatId, "📊 Analyzing token...");
-        const pyProc = spawnPython("analysis_fast.py", [tokenAddr]);
-        let output = "";
-        pyProc.stdout.on("data", (d) => { output += d.toString(); });
-        pyProc.stderr.on("data", (d) => { output += d.toString(); });
-        pyProc.on("close", async () => {
-            const result = output.trim() || "Analysis failed";
-            const msg = await bot.sendMessage(chatId, "📊 *TOKEN ANALYSIS*\n\n" + result, {
-                parse_mode: "Markdown",
-                disable_web_page_preview: true,
-                reply_markup: { inline_keyboard: [[{ text: "⬅️ BACK", callback_data: "back_home" }]] }
-            });
-            setTimeout(() => deleteMessageSafe(chatId, msg.message_id), 60000);
-        });
         return;
     }
 
