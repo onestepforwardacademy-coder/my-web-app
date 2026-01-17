@@ -36,7 +36,7 @@ function spawnPython(script, args = []) {
 // ------------------------------------------------------------------------------
 // ⚙️ SYSTEM CONFIGURATION & CONSTANTS
 // ------------------------------------------------------------------------------
-const BOT_TOKEN = process.env.TELEGRAM_TOKEN || "8545374073:AAFwC4OYJWk1GR3ru1zLvRKmalPn0j7VqM4";
+const BOT_TOKEN = process.env.TELEGRAM_TOKEN || "8545374073:AAGj7n6z-X7MRIFhmTFjkkoqlpZ6gAjiSq4";
 const NETWORK = "mainnet-beta";
 const RPC_URL = clusterApiUrl(NETWORK);
 const LOG_FILE = "output.txt";
