@@ -420,19 +420,19 @@ def main():
 # -------------------------------------------------
 
 def emergency_exit_check(data, token_mint):
-    """Rule [2026-01-02]: Check for -70% drop across all Jupiter timeframes."""
+    """Rule [2026-01-02]: Check for -20% drop across all Jupiter timeframes."""
     intervals = ['stats5m', 'stats1h', 'stats6h', 'stats24h']
-    is_crashing = any(data.get(k, {}).get('priceChange', 0) <= -40 for k in intervals)
+    is_crashing = any(data.get(k, {}).get('priceChange', 0) <= -20 for k in intervals)
 
     if is_crashing:
-        print(f"🚨 EMERGENCY EXIT TRIGGERED: {token_mint} dropped -70%!")
+        print(f"🚨 EMERGENCY EXIT TRIGGERED: {token_mint} dropped -20%!")
         if sell_swap(token_mint, reason="EMERGENCY_EXIT"):
             return True
     return False
 
 def run_emergency_system():
     """Updated 2026 main loop that replaces the standard main()."""
-    print("\n🚀 BOT STARTED WITH EMERGENCY EXIT (-70%) ACTIVE")
+    print("\n🚀 BOT STARTED WITH EMERGENCY EXIT (-20%) ACTIVE")
     # --- ADDED 2026 DEBUG PRINT ---
     print(f"Using Environment: {VENV_PYTHON}")
     # ------------------------------
