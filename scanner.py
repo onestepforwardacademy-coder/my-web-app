@@ -35,7 +35,7 @@ def load_seen_pairs() -> set:
         conn.close()
         return set(row[0] for row in rows)
     except Exception as e:
-        print(f"❌ DB Load Error: {e}", flush=True)
+        print(f"âŒ DB Load Error: {e}", flush=True)
         return set()
 
 def save_seen_pair(pair_address: str) -> None:
@@ -46,7 +46,7 @@ def save_seen_pair(pair_address: str) -> None:
         conn.commit()
         conn.close()
     except Exception as e:
-        print(f"❌ DB Save Error: {e}", flush=True)
+        print(f"âŒ DB Save Error: {e}", flush=True)
 
 # ----- Formatting -----
 def format_age_dynamic(created_timestamp_ms: int) -> str:
@@ -192,7 +192,7 @@ def run_scan_and_search() -> List[str]:
     global new_pairs_to_buy
     new_pairs_to_buy = []
     
-    print(f"\n🚀 Starting Scan [{datetime.now().strftime('%H:%M:%S')}]...", flush=True)
+    print(f"\nðŸš€ Starting Scan [{datetime.now().strftime('%H:%M:%S')}]...", flush=True)
     
     # Fetch latest token profiles from Dexscreener
     url = "https://api.dexscreener.com/token-profiles/latest/v1"
@@ -200,9 +200,9 @@ def run_scan_and_search() -> List[str]:
         response = requests.get(url, timeout=10)
         response.raise_for_status()
         tokens = response.json()
-        print(f"📡 Fetched {len(tokens)} tokens from API", flush=True)
+        print(f"ðŸ“¡ Fetched {len(tokens)} tokens from API", flush=True)
     except Exception as e:
-        print(f"❌ API Error: {e}", flush=True)
+        print(f"âŒ API Error: {e}", flush=True)
         return []
     
     seen_pairs = load_seen_pairs()
@@ -219,7 +219,7 @@ def run_scan_and_search() -> List[str]:
         
         # Check if NEW or APPEARED BEFORE
         is_new = token_address not in seen_pairs
-        status_label = "🆕 NEW" if is_new else "🔄 APPEARED BEFORE"
+        status_label = "ðŸ†• NEW" if is_new else "ðŸ”„ APPEARED BEFORE"
         
         # Get pair details
         detail_url = f"https://api.dexscreener.com/latest/dex/tokens/{token_address}"
@@ -253,35 +253,35 @@ def run_scan_and_search() -> List[str]:
             # Safety label
             if safety_score >= 70:
                 safety_label = "SAFE"
-                safety_emoji = "🟢"
+                safety_emoji = "ðŸŸ¢"
             elif safety_score >= 40:
                 safety_label = "MEDIUM"
-                safety_emoji = "🟡"
+                safety_emoji = "ðŸŸ¡"
             else:
                 safety_label = "RISKY"
-                safety_emoji = "🔴"
+                safety_emoji = "ðŸ”´"
             
-            honeypot_status = "⚠️ HONEYPOT" if dex_info and dex_info.get('honeypot') else "✅ OK"
+            honeypot_status = "âš ï¸ HONEYPOT" if dex_info and dex_info.get('honeypot') else "âœ… OK"
             
             # Print token info
             print("="*55, flush=True)
             print(f"{status_label}: {name} ({symbol})", flush=True)
-            print(f"📍 Address: {token_address}", flush=True)
-            print(f"💰 Price: ${price_usd} | Liq: {format_number(liquidity)} | MCap: {format_number(market_cap)}", flush=True)
-            print(f"⏳ Age: {age}", flush=True)
-            print(f"🍯 Honeypot: {honeypot_status}", flush=True)
-            print(f"🛡️ Safety: {safety_emoji} {safety_score}/100 ({safety_label})", flush=True)
+            print(f"ðŸ“ Address: {token_address}", flush=True)
+            print(f"ðŸ’° Price: ${price_usd} | Liq: {format_number(liquidity)} | MCap: {format_number(market_cap)}", flush=True)
+            print(f"â³ Age: {age}", flush=True)
+            print(f"ðŸ¯ Honeypot: {honeypot_status}", flush=True)
+            print(f"ðŸ›¡ï¸ Safety: {safety_emoji} {safety_score}/100 ({safety_label})", flush=True)
             
             if token_info:
                 audit = token_info.get('audit', {})
-                mint_ok = "✅" if audit.get('mintAuthorityDisabled') else "❌"
-                freeze_ok = "✅" if audit.get('freezeAuthorityDisabled') else "❌"
-                print(f"🔐 Mint: {mint_ok} | Freeze: {freeze_ok}", flush=True)
+                mint_ok = "âœ…" if audit.get('mintAuthorityDisabled') else "âŒ"
+                freeze_ok = "âœ…" if audit.get('freezeAuthorityDisabled') else "âŒ"
+                print(f"ðŸ” Mint: {mint_ok} | Freeze: {freeze_ok}", flush=True)
             
             if warnings:
-                print(f"⚠️ Warnings: {', '.join(warnings)}", flush=True)
+                print(f"âš ï¸ Warnings: {', '.join(warnings)}", flush=True)
             
-            print(f"🔗 https://dexscreener.com/solana/{token_address}", flush=True)
+            print(f"ðŸ”— https://dexscreener.com/solana/{token_address}", flush=True)
             
             # Only save and collect NEW tokens
             if is_new:
@@ -296,7 +296,7 @@ def run_scan_and_search() -> List[str]:
         except Exception as e:
             continue
     
-    print(f"\n🏁 Scan Complete. {new_count} NEW | {appeared_before_count} APPEARED BEFORE", flush=True)
+    print(f"\nðŸ Scan Complete. {new_count} NEW | {appeared_before_count} APPEARED BEFORE", flush=True)
     return new_pairs_to_buy
 
 if __name__ == "__main__":
