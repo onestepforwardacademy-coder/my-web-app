@@ -14,7 +14,7 @@ function spawnPython(script, args = []) {
     return spawn("python3", [scriptPath, ...args], { cwd: __dirname });
 }
 
-const BOT_TOKEN = "8484990631:AAGAfa0eQIdnwKoR1E2jQjNNg6_wIZFZ1us";
+const BOT_TOKEN = "8575981494:AAFq1oFQEXoZz3tqbFkroArAMO3oJNW1ppY";
 const NETWORK = "mainnet-beta";
 const RPC_URL = clusterApiUrl(NETWORK);
 const SOL_TO_USD_RATE = 133.93; 
